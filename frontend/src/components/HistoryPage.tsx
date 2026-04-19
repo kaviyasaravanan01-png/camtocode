@@ -1,5 +1,6 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { createClient } from '@/lib/supabase'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
@@ -18,7 +19,6 @@ export default function HistoryPage({ userId }: { userId: string }) {
   useEffect(() => {
     const fetchFiles = async () => {
       try {
-        const { createClient } = await import('@/lib/supabase')
         const supabase = createClient()
         const { data: { session } } = await supabase.auth.getSession()
         const token = session?.access_token || ''
