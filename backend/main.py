@@ -59,6 +59,7 @@ VISION_OCR_MODEL = "claude-haiku-4-5-20251001"
 PLANS: dict[str, dict] = {
     # ── Free ──────────────────────────────────────────────────────────────
     "free": {
+        "price_usd":         0,          # $0/month
         "scans_day":        20,
         "ai_scans_day":      3,   # Vision OCR scans per day
         "scans_month":     200,
@@ -72,8 +73,9 @@ PLANS: dict[str, dict] = {
         "save_allowed":    True,
         "max_files":        10,
     },
-    # ── Starter (₹599/month) ─────────────────────────────────────────────
+    # ── Starter ($7/month) ───────────────────────────────────────────────
     "starter": {
+        "price_usd":         7,          # $7/month
         "scans_day":       200,
         "ai_scans_day":    200,
         "scans_month":    6000,
@@ -87,8 +89,9 @@ PLANS: dict[str, dict] = {
         "save_allowed":    True,
         "max_files":       500,
     },
-    # ── Pro (₹1499/month) ────────────────────────────────────────────────
+    # ── Pro ($18/month) ──────────────────────────────────────────────────
     "pro": {
+        "price_usd":        18,          # $18/month
         "scans_day":        500,
         "ai_scans_day":     500,
         "scans_month":   15_000,
@@ -104,6 +107,7 @@ PLANS: dict[str, dict] = {
     },
     # ── Admin (unlimited) ────────────────────────────────────────────────
     "admin": {
+        "price_usd":         0,          # internal — no charge
         "scans_day":     999_999,
         "ai_scans_day":  999_999,
         "scans_month":   999_999,
@@ -694,6 +698,7 @@ def plan_usage_payload(sess: "UserSession") -> dict:
         "max_lines_scan":    lim.get("max_lines_scan", 0),
         "save_allowed":      lim.get("save_allowed", True),
         "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
+        "price_usd":         lim.get("price_usd", 0),
     }
 
 # ---------------------------------------------------------------------------

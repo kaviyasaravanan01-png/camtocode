@@ -19,6 +19,7 @@ export interface PlanUsage {
   max_lines_scan: number
   save_allowed: boolean
   ai_fix_allowed: boolean
+  price_usd: number
 }
 
 const PLAN_COLORS: Record<string, string> = {

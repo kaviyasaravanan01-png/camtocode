@@ -1,206 +1,957 @@
-'use client'
-import { useState } from 'react'
-import { createClient } from '@/lib/supabase'
+import Link from 'next/link'
 
-export default function LoginPage() {
-  const supabase = createClient()
-  const [email, setEmail]     = useState('')
-  const [password, setPassword] = useState('')
-  const [mode, setMode]       = useState<'login' | 'signup'>('login')
-  const [loading, setLoading] = useState(false)
-  const [msg, setMsg]         = useState('')
-  const [error, setError]     = useState('')
+// ─── Pricing data ────────────────────────────────────────────────────────────
+const PLANS = [
+  {
+    name: 'Free',
+    price: '$0',
+    period: 'forever',
+    color: '#64748b',
+    features: [
+      '3 AI Vision scans / day',
+      '20 total scans / day',
+      '200 scans / month',
+      'Top 100 lines per scan',
+      '10 saved files',
+      'Tesseract fallback OCR',
+      'No AI Fix (upgrade to unlock)',
+    ],
+    cta: 'Get Started Free',
+    highlight: false,
+  },
+  {
+    name: 'Starter',
+    price: '$7',
+    period: 'per month',
+    color: '#0ea5e9',
+    features: [
+      '200 AI Vision scans / day',
+      '6,000 scans / month',
+      '15 AI Fix requests / month',
+      'Top 300 lines per scan',
+      '500 saved files',
+      '120K fix token budget',
+      'Files split into parts if large',
+    ],
+    cta: 'Start Starter',
+    highlight: false,
+  },
+  {
+    name: 'Pro',
+    price: '$18',
+    period: 'per month',
+    color: '#8b5cf6',
+    features: [
+      '500 AI Vision scans / day',
+      '15,000 scans / month',
+      '75 AI Fix requests / month',
+      'Top 1,000 lines per scan',
+      '1,000 saved files',
+      '900K fix token budget',
+      'Claude Sonnet for large files',
+      'Large files auto-merged into one',
+    ],
+    cta: 'Go Pro',
+    highlight: true,
+  },
+]
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
-    setError('')
-    setMsg('')
+const ADD_ONS = [
+  { label: '+1,000 extra scans',  price: '$4'  },
+  { label: '+5,000 extra scans',  price: '$12' },
+  { label: '+20 AI fixes',        price: '$3'  },
+  { label: '+100 AI fixes',       price: '$10' },
+  { label: '+1M fix tokens',      price: '$3'  },
+  { label: '+5M fix tokens',      price: '$9'  },
+]
 
-    if (mode === 'login') {
-      const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) {
-        setError(error.message)
-      } else {
-        window.location.href = '/app'
-      }
-    } else {
-      const { error } = await supabase.auth.signUp({ email, password })
-      if (error) {
-        setError(error.message)
-      } else {
-        setMsg('Check your email for the confirmation link.')
-      }
-    }
-    setLoading(false)
-  }
+const HOW_IT_WORKS = [
+  {
+    step: '01',
+    title: 'Open the Camera',
+    desc: 'Open CamToCode on any device — phone, tablet, or desktop. No installation required.',
+  },
+  {
+    step: '02',
+    title: 'Point at Your Code',
+    desc: 'Aim your camera at a whiteboard, textbook, monitor, or any printed code. Tap Scan.',
+  },
+  {
+    step: '03',
+    title: 'Claude Reads It',
+    desc: 'Claude Vision AI extracts every character accurately — handles messy handwriting, glare, and off-angles.',
+  },
+  {
+    step: '04',
+    title: 'AI Fix & Save',
+    desc: 'Optionally run AI Fix to auto-correct syntax errors, then save the clean file to your cloud storage.',
+  },
+]
 
-  const handleGoogleLogin = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
-    })
-    if (error) setError(error.message)
-  }
+const FEATURES = [
+  {
+    icon: '📸',
+    title: 'Camera-First Capture',
+    desc: 'Capture from a live camera or upload a photo. Supports single shot, auto-burst, and bulk import.',
+  },
+  {
+    icon: '🤖',
+    title: 'Claude Vision OCR',
+    desc: 'Powered by Anthropic Claude — far more accurate than traditional Tesseract OCR, especially for dense code.',
+  },
+  {
+    icon: '🔧',
+    title: 'AI Fix (One Click)',
+    desc: 'Detects and repairs syntax errors, indentation issues, and misread characters automatically.',
+  },
+  {
+    icon: '📂',
+    title: 'Cloud File History',
+    desc: 'Every saved file is stored in your personal cloud bucket. Download anytime from the History page.',
+  },
+  {
+    icon: '⚡',
+    title: 'Real-Time Streaming',
+    desc: 'Results stream token-by-token as Claude processes. No waiting for a full round-trip.',
+  },
+  {
+    icon: '🔒',
+    title: 'Secure & Private',
+    desc: 'Files stored under your user ID in isolated Supabase Storage. No one else can see your code.',
+  },
+  {
+    icon: '🌍',
+    title: 'Works Everywhere',
+    desc: 'Progressive Web App — works on iOS, Android, and desktop browsers. No app store needed.',
+  },
+  {
+    icon: '🧠',
+    title: 'Sonnet for Complex Files',
+    desc: 'Pro plan automatically routes large, complex files to Claude Sonnet for higher accuracy.',
+  },
+]
 
+const FAQ = [
+  {
+    q: 'What programming languages does it support?',
+    a: 'Any language visible in a photo — Python, JavaScript, Java, C++, Go, Rust, and more. Claude reads code character-by-character regardless of language.',
+  },
+  {
+    q: 'What is the difference between a "scan" and an "AI scan"?',
+    a: 'An AI scan uses Claude Vision (more accurate, costs tokens). A regular scan falls back to Tesseract OCR (offline, fast, less accurate). Both count toward your daily scan limit.',
+  },
+  {
+    q: 'What is AI Fix?',
+    a: 'After scanning, AI Fix sends the raw extracted code back to Claude to repair syntax errors, fix indentation, and correct misread characters — producing clean, runnable code.',
+  },
+  {
+    q: 'Can I use CamToCode on my phone?',
+    a: 'Yes. Open the URL in Safari or Chrome on iPhone/Android. Tap "Add to Home Screen" for a native-like app experience.',
+  },
+  {
+    q: 'What happens when I hit my plan limit?',
+    a: 'You will see a clear message explaining which limit was reached. Your existing saved files are never affected. Upgrade or wait for the limit to reset.',
+  },
+  {
+    q: 'When will Razorpay / payment be available?',
+    a: 'Payments via Razorpay (for India) and Stripe (worldwide) are coming soon. Contact us to be notified or to arrange manual plan upgrades in the meantime.',
+  },
+  {
+    q: 'Is my data safe?',
+    a: 'All files are stored in Supabase Storage under your unique user ID with row-level security. We never share or sell your code.',
+  },
+]
+
+// ─── Nav ──────────────────────────────────────────────────────────────────────
+function Nav() {
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <h1 style={styles.logo}>CamToCode</h1>
-        <p style={styles.subtitle}>Point your phone at code. Get clean, corrected code instantly.</p>
-
-        <button onClick={handleGoogleLogin} style={styles.googleBtn}>
-          <svg width="18" height="18" viewBox="0 0 24 24" style={{ marginRight: 8, verticalAlign: 'middle' }}>
-            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-          </svg>
-          Continue with Google
-        </button>
-
-        <div style={styles.divider}><span>or</span></div>
-
-        <form onSubmit={handleSubmit} style={styles.form}>
-          <input
-            type="email"
-            placeholder="Email address"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
-            required
-            style={styles.input}
-          />
-          <input
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            required
-            style={styles.input}
-          />
-          {error && <p style={styles.errorMsg}>{error}</p>}
-          {msg   && <p style={styles.successMsg}>{msg}</p>}
-          <button type="submit" disabled={loading} style={styles.submitBtn}>
-            {loading ? 'Loading...' : mode === 'login' ? 'Sign In' : 'Create Account'}
-          </button>
-        </form>
-
-        <p style={styles.toggleText}>
-          {mode === 'login' ? "Don't have an account? " : 'Already have an account? '}
-          <button
-            onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); setMsg('') }}
-            style={styles.toggleBtn}
-          >
-            {mode === 'login' ? 'Sign Up' : 'Sign In'}
-          </button>
-        </p>
+    <nav style={s.nav}>
+      <a href="/" style={s.navLogo}>CamToCode</a>
+      <div style={s.navLinks}>
+        <a href="#features" style={s.navLink}>Features</a>
+        <a href="#how-it-works" style={s.navLink}>How It Works</a>
+        <a href="#pricing" style={s.navLink}>Pricing</a>
+        <a href="#faq" style={s.navLink}>FAQ</a>
       </div>
+      <div style={s.navActions}>
+        <Link href="/login" style={s.signInBtn}>Sign In</Link>
+        <Link href="/login" style={s.getStartedBtn}>Get Started Free</Link>
+      </div>
+    </nav>
+  )
+}
+
+// ─── Page ────────────────────────────────────────────────────────────────────
+export default function LandingPage() {
+  return (
+    <div style={s.root}>
+      <Nav />
+
+      {/* ── Hero ──────────────────────────────────────────────────────────── */}
+      <section style={s.hero}>
+        <div style={s.heroBadge}>Powered by Claude Vision AI</div>
+        <h1 style={s.heroTitle}>
+          Point your camera at code.<br />
+          <span style={s.heroGradient}>Get clean code instantly.</span>
+        </h1>
+        <p style={s.heroSub}>
+          CamToCode uses Anthropic's Claude Vision to extract code from any photo —
+          whiteboards, textbooks, monitors, handwritten notes. One tap to scan,
+          one click to fix, one button to save.
+        </p>
+        <div style={s.heroCtas}>
+          <Link href="/login" style={s.ctaPrimary}>Start for Free →</Link>
+          <a href="#how-it-works" style={s.ctaSecondary}>See How It Works</a>
+        </div>
+        <div style={s.heroStats}>
+          <div style={s.heroStat}><span style={s.heroStatNum}>Claude</span><span style={s.heroStatLabel}>Vision AI</span></div>
+          <div style={s.heroStatDivider} />
+          <div style={s.heroStat}><span style={s.heroStatNum}>Any Language</span><span style={s.heroStatLabel}>Supported</span></div>
+          <div style={s.heroStatDivider} />
+          <div style={s.heroStat}><span style={s.heroStatNum}>Real-Time</span><span style={s.heroStatLabel}>Streaming</span></div>
+          <div style={s.heroStatDivider} />
+          <div style={s.heroStat}><span style={s.heroStatNum}>Worldwide</span><span style={s.heroStatLabel}>Access</span></div>
+        </div>
+      </section>
+
+      {/* ── How It Works ──────────────────────────────────────────────────── */}
+      <section id="how-it-works" style={s.section}>
+        <div style={s.sectionInner}>
+          <p style={s.sectionTag}>Simple Process</p>
+          <h2 style={s.sectionTitle}>How CamToCode Works</h2>
+          <p style={s.sectionSub}>From camera to clean code in under 10 seconds.</p>
+          <div style={s.stepsGrid}>
+            {HOW_IT_WORKS.map(item => (
+              <div key={item.step} style={s.stepCard}>
+                <span style={s.stepNum}>{item.step}</span>
+                <h3 style={s.stepTitle}>{item.title}</h3>
+                <p style={s.stepDesc}>{item.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Features ──────────────────────────────────────────────────────── */}
+      <section id="features" style={{ ...s.section, background: 'rgba(255,255,255,0.02)' }}>
+        <div style={s.sectionInner}>
+          <p style={s.sectionTag}>Everything You Need</p>
+          <h2 style={s.sectionTitle}>Features Built for Developers</h2>
+          <p style={s.sectionSub}>
+            A complete toolkit for capturing, fixing, and storing code from any source.
+          </p>
+          <div style={s.featGrid}>
+            {FEATURES.map(f => (
+              <div key={f.title} style={s.featCard}>
+                <span style={s.featIcon}>{f.icon}</span>
+                <h3 style={s.featTitle}>{f.title}</h3>
+                <p style={s.featDesc}>{f.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Use Cases ─────────────────────────────────────────────────────── */}
+      <section style={s.section}>
+        <div style={s.sectionInner}>
+          <p style={s.sectionTag}>Who Is It For</p>
+          <h2 style={s.sectionTitle}>Perfect For Every Developer</h2>
+          <div style={s.useCaseGrid}>
+            {[
+              { icon: '🎓', title: 'Students', desc: 'Capture code from slides, textbooks, or a professor\'s whiteboard instantly without retyping.' },
+              { icon: '🏢', title: 'Engineers', desc: 'Digitize legacy code from printed manuals, post-its, or someone\'s monitor without error.' },
+              { icon: '📚', title: 'Educators', desc: 'Quickly digitize example code from books to share with students as runnable files.' },
+              { icon: '🔬', title: 'Researchers', desc: 'Extract code from journal papers, conference slides, or lab whiteboards effortlessly.' },
+            ].map(u => (
+              <div key={u.title} style={s.useCaseCard}>
+                <span style={{ fontSize: '2rem' }}>{u.icon}</span>
+                <h3 style={s.useCaseTitle}>{u.title}</h3>
+                <p style={s.useCaseDesc}>{u.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Pricing ───────────────────────────────────────────────────────── */}
+      <section id="pricing" style={{ ...s.section, background: 'rgba(255,255,255,0.02)' }}>
+        <div style={s.sectionInner}>
+          <p style={s.sectionTag}>Simple Pricing</p>
+          <h2 style={s.sectionTitle}>Plans for Every Need</h2>
+          <p style={s.sectionSub}>
+            All prices in USD. Cancel anytime. No hidden fees.
+          </p>
+          <div style={s.plansGrid}>
+            {PLANS.map(plan => (
+              <div
+                key={plan.name}
+                style={{
+                  ...s.planCard,
+                  borderColor: plan.highlight ? plan.color : 'rgba(255,255,255,0.1)',
+                  boxShadow: plan.highlight ? `0 0 40px ${plan.color}33` : undefined,
+                }}
+              >
+                {plan.highlight && (
+                  <div style={{ ...s.popularBadge, background: plan.color }}>Most Popular</div>
+                )}
+                <div style={{ ...s.planChip, background: plan.color }}>{plan.name}</div>
+                <div style={s.planPrice}>
+                  <span style={s.planPriceNum}>{plan.price}</span>
+                  <span style={s.planPricePeriod}>/{plan.period}</span>
+                </div>
+                <ul style={s.planFeatures}>
+                  {plan.features.map(f => (
+                    <li key={f} style={s.planFeature}>
+                      <span style={{ color: plan.color, marginRight: 8 }}>✓</span>{f}
+                    </li>
+                  ))}
+                </ul>
+                <Link href="/login" style={{ ...s.planCta, background: plan.highlight ? plan.color : 'rgba(255,255,255,0.08)' }}>
+                  {plan.cta}
+                </Link>
+              </div>
+            ))}
+          </div>
+
+          {/* Add-ons */}
+          <div style={s.addonsWrap}>
+            <h3 style={s.addonsTitle}>Add-On Packs (coming soon)</h3>
+            <p style={s.addonsSub}>Need more? Top up without upgrading your plan.</p>
+            <div style={s.addonsGrid}>
+              {ADD_ONS.map(a => (
+                <div key={a.label} style={s.addonCard}>
+                  <span style={s.addonLabel}>{a.label}</span>
+                  <span style={s.addonPrice}>{a.price}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ── FAQ ───────────────────────────────────────────────────────────── */}
+      <section id="faq" style={s.section}>
+        <div style={s.sectionInner}>
+          <p style={s.sectionTag}>FAQ</p>
+          <h2 style={s.sectionTitle}>Frequently Asked Questions</h2>
+          <div style={s.faqGrid}>
+            {FAQ.map(item => (
+              <div key={item.q} style={s.faqCard}>
+                <h3 style={s.faqQ}>{item.q}</h3>
+                <p style={s.faqA}>{item.a}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── CTA Banner ────────────────────────────────────────────────────── */}
+      <section style={s.ctaBanner}>
+        <div style={s.ctaBannerInner}>
+          <h2 style={s.ctaBannerTitle}>Ready to stop retyping code?</h2>
+          <p style={s.ctaBannerSub}>
+            Join developers who use CamToCode to digitize code in seconds — for free.
+          </p>
+          <Link href="/login" style={s.ctaBannerBtn}>Get Started Free — No Card Required</Link>
+        </div>
+      </section>
+
+      {/* ── Footer ────────────────────────────────────────────────────────── */}
+      <footer style={s.footer}>
+        <div style={s.footerInner}>
+          <div style={s.footerBrand}>
+            <span style={s.footerLogo}>CamToCode</span>
+            <p style={s.footerTagline}>
+              Point your camera at code. Get clean code instantly.
+            </p>
+          </div>
+          <div style={s.footerLinks}>
+            <div style={s.footerCol}>
+              <span style={s.footerColTitle}>Product</span>
+              <a href="#features" style={s.footerLink}>Features</a>
+              <a href="#how-it-works" style={s.footerLink}>How It Works</a>
+              <a href="#pricing" style={s.footerLink}>Pricing</a>
+            </div>
+            <div style={s.footerCol}>
+              <span style={s.footerColTitle}>Account</span>
+              <Link href="/login" style={s.footerLink}>Sign In</Link>
+              <Link href="/login" style={s.footerLink}>Sign Up</Link>
+              <Link href="/app" style={s.footerLink}>Open App</Link>
+            </div>
+            <div style={s.footerCol}>
+              <span style={s.footerColTitle}>Support</span>
+              <a href="#faq" style={s.footerLink}>FAQ</a>
+              <a href="mailto:support@camtocode.com" style={s.footerLink}>Contact Us</a>
+            </div>
+          </div>
+        </div>
+        <div style={s.footerBottom}>
+          <span style={s.footerCopy}>© {new Date().getFullYear()} CamToCode. All rights reserved.</span>
+          <span style={s.footerCopy}>Prices in USD · Powered by Anthropic Claude</span>
+        </div>
+      </footer>
     </div>
   )
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  container: {
+// ─── Styles ──────────────────────────────────────────────────────────────────
+const s: Record<string, React.CSSProperties> = {
+  root: {
     minHeight: '100vh',
+    background: '#080c14',
+    color: '#e2e8f0',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, sans-serif',
+    overflowX: 'hidden',
+  },
+
+  // Nav
+  nav: {
+    position: 'sticky',
+    top: 0,
+    zIndex: 100,
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%)',
-    padding: '1rem',
+    justifyContent: 'space-between',
+    padding: '0.9rem 2rem',
+    background: 'rgba(8,12,20,0.85)',
+    backdropFilter: 'blur(16px)',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
+    gap: 16,
   },
-  card: {
-    background: 'rgba(255,255,255,0.05)',
-    backdropFilter: 'blur(20px)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 20,
-    padding: '2.5rem',
-    width: '100%',
-    maxWidth: 420,
-  },
-  logo: {
-    fontSize: '2rem',
+  navLogo: {
     fontWeight: 800,
-    textAlign: 'center',
+    fontSize: '1.2rem',
     background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
-    marginBottom: '0.5rem',
+    textDecoration: 'none',
+    flexShrink: 0,
   },
-  subtitle: {
-    textAlign: 'center',
-    color: 'rgba(255,255,255,0.6)',
-    fontSize: '0.875rem',
-    marginBottom: '2rem',
-    lineHeight: 1.5,
+  navLinks: {
+    display: 'flex',
+    gap: 28,
+    alignItems: 'center',
   },
-  googleBtn: {
-    width: '100%',
-    background: 'rgba(255,255,255,0.1)',
-    color: '#fff',
-    border: '1px solid rgba(255,255,255,0.2)',
-    borderRadius: 10,
-    padding: '0.75rem',
-    fontSize: '0.9rem',
+  navLink: {
+    color: 'rgba(255,255,255,0.55)',
+    textDecoration: 'none',
+    fontSize: '0.88rem',
     fontWeight: 500,
+    transition: 'color 0.2s',
+  },
+  navActions: {
     display: 'flex',
+    gap: 10,
     alignItems: 'center',
-    justifyContent: 'center',
+    flexShrink: 0,
   },
-  divider: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: 12,
-    margin: '1.5rem 0',
-    color: 'rgba(255,255,255,0.3)',
-    fontSize: '0.8rem',
+  signInBtn: {
+    color: 'rgba(255,255,255,0.7)',
+    textDecoration: 'none',
+    fontSize: '0.88rem',
+    fontWeight: 500,
+    padding: '0.4rem 0.9rem',
+    borderRadius: 8,
+    border: '1px solid rgba(255,255,255,0.12)',
   },
-  form: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '0.75rem',
-  },
-  input: {
-    width: '100%',
-    padding: '0.75rem 1rem',
-    background: 'rgba(255,255,255,0.07)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 10,
-    color: '#fff',
-    fontSize: '0.9rem',
-  },
-  errorMsg: {
-    color: '#ef4444',
-    fontSize: '0.8rem',
-    textAlign: 'center',
-  },
-  successMsg: {
-    color: '#22c55e',
-    fontSize: '0.8rem',
-    textAlign: 'center',
-  },
-  submitBtn: {
-    width: '100%',
+  getStartedBtn: {
     background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
     color: '#fff',
-    padding: '0.75rem',
+    textDecoration: 'none',
+    fontSize: '0.85rem',
     fontWeight: 600,
-    fontSize: '0.95rem',
-    borderRadius: 10,
-    marginTop: '0.25rem',
+    padding: '0.45rem 1rem',
+    borderRadius: 8,
   },
-  toggleText: {
+
+  // Hero
+  hero: {
     textAlign: 'center',
-    marginTop: '1.5rem',
+    padding: '5rem 2rem 4rem',
+    maxWidth: 820,
+    margin: '0 auto',
+  },
+  heroBadge: {
+    display: 'inline-block',
+    background: 'rgba(99,102,241,0.15)',
+    border: '1px solid rgba(99,102,241,0.35)',
+    color: '#818cf8',
+    borderRadius: 20,
+    padding: '0.3rem 1rem',
+    fontSize: '0.78rem',
+    fontWeight: 600,
+    marginBottom: '1.5rem',
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+  },
+  heroTitle: {
+    fontSize: 'clamp(2rem, 5vw, 3.4rem)',
+    fontWeight: 800,
+    lineHeight: 1.15,
+    marginBottom: '1.2rem',
+    color: '#f1f5f9',
+  },
+  heroGradient: {
+    background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a78bfa 100%)',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+  },
+  heroSub: {
+    fontSize: '1.05rem',
+    color: 'rgba(255,255,255,0.55)',
+    maxWidth: 620,
+    margin: '0 auto 2rem',
+    lineHeight: 1.75,
+  },
+  heroCtas: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: 14,
+    flexWrap: 'wrap',
+    marginBottom: '3rem',
+  },
+  ctaPrimary: {
+    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+    color: '#fff',
+    padding: '0.8rem 2rem',
+    borderRadius: 10,
+    fontWeight: 700,
+    textDecoration: 'none',
+    fontSize: '1rem',
+  },
+  ctaSecondary: {
+    border: '1px solid rgba(255,255,255,0.18)',
+    color: 'rgba(255,255,255,0.75)',
+    padding: '0.8rem 2rem',
+    borderRadius: 10,
+    fontWeight: 600,
+    textDecoration: 'none',
+    fontSize: '1rem',
+  },
+  heroStats: {
+    display: 'flex',
+    justifyContent: 'center',
+    gap: 0,
+    flexWrap: 'wrap',
+    borderTop: '1px solid rgba(255,255,255,0.06)',
+    paddingTop: '2rem',
+  },
+  heroStat: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    padding: '0 2rem',
+    gap: 4,
+  },
+  heroStatNum: {
+    fontWeight: 700,
+    fontSize: '1rem',
+    color: '#f1f5f9',
+  },
+  heroStatLabel: {
+    fontSize: '0.72rem',
+    color: 'rgba(255,255,255,0.4)',
+  },
+  heroStatDivider: {
+    width: 1,
+    background: 'rgba(255,255,255,0.08)',
+    alignSelf: 'stretch',
+  },
+
+  // Sections
+  section: {
+    padding: '5rem 2rem',
+  },
+  sectionInner: {
+    maxWidth: 1100,
+    margin: '0 auto',
+    textAlign: 'center',
+  },
+  sectionTag: {
+    display: 'inline-block',
+    background: 'rgba(99,102,241,0.12)',
+    color: '#818cf8',
+    borderRadius: 20,
+    padding: '0.25rem 0.9rem',
+    fontSize: '0.72rem',
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '0.8rem',
+  },
+  sectionTitle: {
+    fontSize: 'clamp(1.5rem, 3vw, 2.2rem)',
+    fontWeight: 800,
+    color: '#f1f5f9',
+    marginBottom: '0.75rem',
+  },
+  sectionSub: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: '0.98rem',
+    marginBottom: '3rem',
+    maxWidth: 580,
+    margin: '0 auto 3rem',
+    lineHeight: 1.65,
+  },
+
+  // Steps
+  stepsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: 24,
+    textAlign: 'left',
+  },
+  stepCard: {
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 14,
+    padding: '1.6rem',
+  },
+  stepNum: {
+    display: 'block',
+    fontWeight: 800,
+    fontSize: '2rem',
+    background: 'linear-gradient(135deg,#6366f1,#8b5cf6)',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    marginBottom: '0.7rem',
+  },
+  stepTitle: {
+    fontWeight: 700,
+    fontSize: '1rem',
+    color: '#f1f5f9',
+    marginBottom: '0.5rem',
+  },
+  stepDesc: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: '0.88rem',
+    lineHeight: 1.65,
+    margin: 0,
+  },
+
+  // Features
+  featGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
+    gap: 20,
+    textAlign: 'left',
+  },
+  featCard: {
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 14,
+    padding: '1.4rem',
+  },
+  featIcon: {
+    display: 'block',
+    fontSize: '1.6rem',
+    marginBottom: '0.7rem',
+  },
+  featTitle: {
+    fontWeight: 700,
+    fontSize: '0.95rem',
+    color: '#f1f5f9',
+    marginBottom: '0.4rem',
+  },
+  featDesc: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: '0.84rem',
+    lineHeight: 1.65,
+    margin: 0,
+  },
+
+  // Use cases
+  useCaseGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+    gap: 20,
+    textAlign: 'left',
+    marginTop: '1rem',
+  },
+  useCaseCard: {
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 14,
+    padding: '1.4rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  useCaseTitle: {
+    fontWeight: 700,
+    fontSize: '0.95rem',
+    color: '#f1f5f9',
+    margin: 0,
+  },
+  useCaseDesc: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: '0.84rem',
+    lineHeight: 1.65,
+    margin: 0,
+  },
+
+  // Pricing
+  plansGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))',
+    gap: 24,
+    textAlign: 'left',
+    marginBottom: '3rem',
+    alignItems: 'start',
+  },
+  planCard: {
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid',
+    borderRadius: 16,
+    padding: '1.8rem',
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 0,
+  },
+  popularBadge: {
+    position: 'absolute',
+    top: -12,
+    left: '50%',
+    transform: 'translateX(-50%)',
+    borderRadius: 20,
+    padding: '0.2rem 0.9rem',
+    fontSize: '0.7rem',
+    fontWeight: 700,
+    color: '#fff',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    whiteSpace: 'nowrap',
+  },
+  planChip: {
+    display: 'inline-block',
+    borderRadius: 6,
+    padding: '2px 10px',
+    fontSize: '0.72rem',
+    fontWeight: 700,
+    color: '#fff',
+    textTransform: 'uppercase',
+    letterSpacing: '0.05em',
+    marginBottom: '0.9rem',
+    alignSelf: 'flex-start',
+  },
+  planPrice: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 4,
+    marginBottom: '1.2rem',
+  },
+  planPriceNum: {
+    fontWeight: 800,
+    fontSize: '2.4rem',
+    color: '#f1f5f9',
+  },
+  planPricePeriod: {
+    fontSize: '0.85rem',
+    color: 'rgba(255,255,255,0.4)',
+  },
+  planFeatures: {
+    listStyle: 'none',
+    padding: 0,
+    margin: '0 0 1.4rem',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    flexGrow: 1,
+  },
+  planFeature: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: '0.86rem',
+    lineHeight: 1.5,
+  },
+  planCta: {
+    display: 'block',
+    textAlign: 'center',
+    color: '#fff',
+    fontWeight: 700,
+    fontSize: '0.9rem',
+    borderRadius: 10,
+    padding: '0.65rem',
+    textDecoration: 'none',
+  },
+
+  // Add-ons
+  addonsWrap: {
+    background: 'rgba(255,255,255,0.03)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    padding: '2rem',
+    textAlign: 'center',
+  },
+  addonsTitle: {
+    fontWeight: 700,
+    fontSize: '1.05rem',
+    color: '#f1f5f9',
+    marginBottom: '0.4rem',
+  },
+  addonsSub: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: '0.85rem',
+    marginBottom: '1.4rem',
+  },
+  addonsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+    gap: 12,
+    maxWidth: 700,
+    margin: '0 auto',
+  },
+  addonCard: {
+    background: 'rgba(255,255,255,0.05)',
+    border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 10,
+    padding: '0.8rem 1rem',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  addonLabel: {
+    fontSize: '0.82rem',
+    color: 'rgba(255,255,255,0.65)',
+  },
+  addonPrice: {
+    fontWeight: 700,
+    fontSize: '0.9rem',
+    color: '#f1f5f9',
+  },
+
+  // FAQ
+  faqGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: 16,
+    textAlign: 'left',
+    marginTop: '1rem',
+  },
+  faqCard: {
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.08)',
+    borderRadius: 12,
+    padding: '1.2rem 1.4rem',
+  },
+  faqQ: {
+    fontWeight: 700,
+    fontSize: '0.92rem',
+    color: '#f1f5f9',
+    marginBottom: '0.5rem',
+  },
+  faqA: {
     color: 'rgba(255,255,255,0.5)',
     fontSize: '0.85rem',
+    lineHeight: 1.65,
+    margin: 0,
   },
-  toggleBtn: {
-    background: 'none',
-    border: 'none',
-    color: '#818cf8',
-    padding: 0,
-    fontWeight: 600,
-    cursor: 'pointer',
-    borderRadius: 0,
+
+  // CTA Banner
+  ctaBanner: {
+    background: 'linear-gradient(135deg, rgba(79,70,229,0.25) 0%, rgba(124,58,237,0.25) 100%)',
+    borderTop: '1px solid rgba(99,102,241,0.2)',
+    borderBottom: '1px solid rgba(99,102,241,0.2)',
+    padding: '4rem 2rem',
+    textAlign: 'center',
+  },
+  ctaBannerInner: {
+    maxWidth: 600,
+    margin: '0 auto',
+  },
+  ctaBannerTitle: {
+    fontWeight: 800,
+    fontSize: 'clamp(1.5rem, 3vw, 2rem)',
+    color: '#f1f5f9',
+    marginBottom: '0.8rem',
+  },
+  ctaBannerSub: {
+    color: 'rgba(255,255,255,0.55)',
+    fontSize: '0.98rem',
+    marginBottom: '1.8rem',
+    lineHeight: 1.65,
+  },
+  ctaBannerBtn: {
+    display: 'inline-block',
+    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+    color: '#fff',
+    padding: '0.85rem 2.2rem',
+    borderRadius: 10,
+    fontWeight: 700,
+    textDecoration: 'none',
+    fontSize: '1rem',
+  },
+
+  // Footer
+  footer: {
+    background: 'rgba(0,0,0,0.3)',
+    borderTop: '1px solid rgba(255,255,255,0.06)',
+    padding: '3rem 2rem 1.5rem',
+  },
+  footerInner: {
+    maxWidth: 1100,
+    margin: '0 auto',
+    display: 'flex',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 32,
+    paddingBottom: '2rem',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
+    marginBottom: '1.5rem',
+  },
+  footerBrand: {
+    maxWidth: 260,
+  },
+  footerLogo: {
+    fontWeight: 800,
+    fontSize: '1.1rem',
+    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    display: 'block',
+    marginBottom: '0.6rem',
+  },
+  footerTagline: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: '0.82rem',
+    lineHeight: 1.6,
+    margin: 0,
+  },
+  footerLinks: {
+    display: 'flex',
+    gap: 48,
+    flexWrap: 'wrap',
+  },
+  footerCol: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
+  },
+  footerColTitle: {
+    fontWeight: 700,
+    fontSize: '0.78rem',
+    color: 'rgba(255,255,255,0.55)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    marginBottom: 4,
+  },
+  footerLink: {
+    color: 'rgba(255,255,255,0.4)',
+    textDecoration: 'none',
+    fontSize: '0.85rem',
+    lineHeight: 1,
+  },
+  footerBottom: {
+    maxWidth: 1100,
+    margin: '0 auto',
+    display: 'flex',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  footerCopy: {
+    color: 'rgba(255,255,255,0.25)',
+    fontSize: '0.78rem',
   },
 }
