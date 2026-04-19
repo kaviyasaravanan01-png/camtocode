@@ -122,13 +122,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setSyntaxOk(d.syntax_ok); setSyntaxErr(d.syntax_err || '')
         if (d.download_url) setLastDownload(d.download_url)
         addLog('result: ' + d.lang + ' ai=' + d.ai_used)
-        // Show save modal
+        // Update suggested filename for save modal (don't auto-open)
         const ext = _LANG_EXT[d.lang] || '.txt'
         const ts = new Date().toISOString().slice(0,10).replace(/-/g,'')
-        setSaveFilename(`${d.lang || 'code'}_${ts}${ext}`)
-        setPendingText(d.text)
+        setSaveFilename(prev => prev || `${d.lang || 'code'}_${ts}${ext}`)
         setPendingLang(d.lang)
-        setShowSaveModal(true)
       })
       sock.on('auto_captured', () => { addLog('auto_captured'); handleStopRef.current?.() })
       sock.on('session_fixed', (d: SessionFixedData) => {
@@ -140,6 +138,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
       sock.on('result_saved', (d: any) => {
         setSaving(false); setShowSaveModal(false)
+        setSaveFilename(''); setPendingLang('')  // reset for next session
         if (d.error) { setStatusMsg('Save error: ' + d.error); addLog('save error: ' + d.error); return }
         if (d.download_url) setLastDownload(d.download_url)
         if (d.text) setFinalText(d.text)
@@ -230,7 +229,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const handleCopy = (text: string) => navigator.clipboard.writeText(text).then(() => setStatusMsg('Copied!'))
   const handleSaveSubmit = (withAi: boolean) => {
     setSaving(true)
-    emit('save_result', { text: pendingText, lang: pendingLang, filename: saveFilename, ai_fix: withAi, model: saveModel })
+    // Don't pass text — backend reads the full accumulated live_buffer.txt
+    emit('save_result', { lang: pendingLang, filename: saveFilename, ai_fix: withAi, model: saveModel })
   }
   const handleExportSubmit = () => { setExporting(true); emit('fix_session_file', { filename: exportFilename, ai_fix: true, model: exportModel }) }
   const handleSignOut = async () => { await supabase.auth.signOut(); window.location.href = '/' }
@@ -391,6 +391,14 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           <div style={{ display: 'flex', gap: 6 }}>
             {outputText && <button onClick={() => handleCopy(outputText)} style={s.smallBtn}>Copy</button>}
             {outputText && <button onClick={() => { setFinalText(''); setLiveText('') }} style={s.smallBtn}>Clear</button>}
+            {finalText && !capturing && (
+              <button
+                onClick={() => setShowSaveModal(true)}
+                style={{ ...s.smallBtn, background: 'rgba(99,102,241,0.3)', borderColor: 'rgba(99,102,241,0.5)', color: '#a5b4fc' }}
+              >
+                💾 Save File
+              </button>
+            )}
             {lastDownload && (
               <a href={lastDownload} download style={{ textDecoration: 'none' }}>
                 <button style={s.smallBtn}>↓ DL</button>
@@ -406,13 +414,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </pre>
       </div>
 
-      {/* Save Result Modal — shown after every scan */}
+      {/* Save File Modal — opened via 💾 Save File button */}
       {showSaveModal && (
         <div style={s.backdrop} onClick={() => !saving && setShowSaveModal(false)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
             <h3 style={{ marginBottom: '0.5rem', fontSize: '1rem' }}>Save Result</h3>
             <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem', marginBottom: '1rem' }}>
-              {pendingLang} · {pendingText.split('\n').length} lines
+              Saves all scans captured so far{pendingLang ? ` · ${pendingLang}` : ''}
             </p>
             <input
               type="text"

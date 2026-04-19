@@ -1760,11 +1760,19 @@ def on_fix_session_file(data=None):
 
 @socketio.on("save_result")
 def on_save_result(data=None):
-    """Save a single scan result to Supabase Storage exports folder."""
+    """Save accumulated scans to Supabase Storage exports folder."""
     sess = get_session(request.sid)
     _d = data or {}
 
-    text = str(_d.get("text", "")).strip()
+    # Always read from live_buffer first (all accumulated scans), fall back to last scan
+    if sess.user_id and SUPABASE_URL:
+        text = supabase_read_text(_sb_storage_path(sess.user_id)).strip()
+    else:
+        try:
+            with open(f"output_{sess.sid}.txt", encoding="utf-8") as f:
+                text = f.read().strip()
+        except Exception:
+            text = ""
     if not text:
         text = sess.last_saved.strip()
     if not text:
@@ -1805,11 +1813,12 @@ def on_save_result(data=None):
         new_name = f"{now_str}_{lang}{ext}"
 
     download_url = ""
+    n_blocks = len([b for b in text.split("\n\n") if b.strip()])
     if sess.user_id and SUPABASE_URL:
         export_path = _sb_export_path(sess.user_id, new_name)
         supabase_write_text(export_path, corrected)
         download_url = supabase_signed_url(export_path, expires_in=86400)
-        supabase_log_capture(sess.user_id, new_name, lang, 1)
+        supabase_log_capture(sess.user_id, new_name, lang, n_blocks)
     else:
         try:
             with open(new_name, "w", encoding="utf-8") as f:
@@ -1825,6 +1834,10 @@ def on_save_result(data=None):
         "download_url": download_url,
     })
     emit("status", {"capturing": False, "msg": f"Saved as {new_name}"})
+    # Clear the live buffer so next set of scans starts fresh
+    if sess.user_id and SUPABASE_URL:
+        supabase_write_text(_sb_storage_path(sess.user_id), "")
+    sess.last_saved = ""
 
 
 # ---------------------------------------------------------------------------
