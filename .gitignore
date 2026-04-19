@@ -62,3 +62,9 @@ backup/
 !QUICK_START_VOTING.md
 !CONSENSUS_VOTING_EXPLAINED.md
 !VOTING_VISUAL_GUIDE.md
+
+# Test/dev scripts with potential secrets
+test_*.py
+sampleinput.*
+sampleoutput.*
+test_vision_output.txt

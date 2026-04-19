@@ -9,7 +9,6 @@ from PIL import Image
 import numpy as np
 import cv2
 
-API_KEY   = "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"
 MODEL     = "claude-sonnet-4-6"
 IMG_PATH  = "sampleinput.jpeg"
 REF_PATH  = "sampleoutput.txt"
