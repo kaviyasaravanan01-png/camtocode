@@ -160,7 +160,7 @@ const FAQ = [
   },
   {
     q: 'Is my data safe?',
-    a: 'All files are stored in Supabase Storage under your unique user ID with row-level security. We never share or sell your code.',
+    a: 'All files are stored in Supabase Storage under your unique user ID with row-level security and encryption. No one else can access your files.',
   },
 ]
 
