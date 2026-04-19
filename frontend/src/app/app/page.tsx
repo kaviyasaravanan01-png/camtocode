@@ -1,4 +1,4 @@
-import { createServerComponentClient } from '@/lib/supabase'
+import { createServerComponentClient } from '@/lib/supabase-server'
 import { redirect } from 'next/navigation'
 import CameraApp from '@/components/CameraApp'
 
