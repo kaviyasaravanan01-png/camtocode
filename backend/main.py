@@ -18,6 +18,9 @@ import threading
 import queue
 import json
 import time as _time
+import hmac as _hmac
+import hashlib as _hashlib
+import uuid as _uuid
 from collections import deque
 from io import BytesIO
 from collections import Counter
@@ -41,6 +44,18 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")   # service_ro
 SUPABASE_JWT_SECRET  = os.environ.get("SUPABASE_JWT_SECRET", "")    # JWT secret from dashboard
 FRONTEND_URL         = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 PORT                 = int(os.environ.get("PORT", 5000))
+
+# ---------------------------------------------------------------------------
+# Razorpay
+# ---------------------------------------------------------------------------
+RAZORPAY_KEY_ID     = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
+# Plan prices in INR paise (1 INR = 100 paise)
+PLAN_PRICES_INR: dict[str, int] = {
+    "starter": 59900,    # ₹599  ≈ $7
+    "pro":     149900,   # ₹1499 ≈ $18
+}
 
 # ---------------------------------------------------------------------------
 # Subscription plans & admin config
@@ -2400,17 +2415,144 @@ def on_get_plan_usage():
 # ---------------------------------------------------------------------------
 # Admin HTTP routes
 # ---------------------------------------------------------------------------
-def _require_admin(request_obj) -> tuple[dict | None, str]:
-    """Verify token and admin role. Returns (payload, error_msg)."""
+def _require_auth(request_obj) -> tuple[dict | None, str]:
+    """Verify token for any authenticated user. Returns (payload, error_msg)."""
     auth    = request_obj.headers.get("Authorization", "")
     token   = auth.removeprefix("Bearer ").strip()
     payload = verify_supabase_token(token)
     if not payload:
         return None, "Unauthorized"
-    email = payload.get("email", "")
-    if email not in ADMIN_EMAILS:
-        return None, "Forbidden — admin only"
     return payload, ""
+
+
+def _require_admin(request_obj) -> tuple[dict | None, str]:
+
+# ---------------------------------------------------------------------------
+# Razorpay payment endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/create_order", methods=["POST"])
+def create_order():
+    """Create a Razorpay order for a plan upgrade.
+    Body: { "plan": "starter" | "pro" }
+    Returns: { order_id, amount, currency, key_id }
+    """
+    payload, err = _require_auth(request)
+    if err:
+        return jsonify({"error": err}), 401
+
+    if not RAZORPAY_KEY_ID or not RAZORPAY_KEY_SECRET:
+        return jsonify({"error": "Payment not configured"}), 503
+
+    body = request.get_json(force=True) or {}
+    plan = body.get("plan", "")
+    if plan not in PLAN_PRICES_INR:
+        return jsonify({"error": f"Plan must be one of: {list(PLAN_PRICES_INR)}"}), 400
+
+    user_id = payload.get("sub", "")
+    receipt = f"order_{plan}_{user_id[:8]}_{_uuid.uuid4().hex[:8]}"
+
+    try:
+        resp = httpx.post(
+            "https://api.razorpay.com/v1/orders",
+            auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
+            json={
+                "amount":   PLAN_PRICES_INR[plan],
+                "currency": "INR",
+                "receipt":  receipt,
+                "notes":    {"plan": plan, "user_id": user_id},
+            },
+            timeout=10,
+        )
+    except Exception as e:
+        return jsonify({"error": f"Razorpay unreachable: {e}"}), 502
+
+    if resp.status_code != 200:
+        return jsonify({"error": f"Razorpay error {resp.status_code}", "detail": resp.text}), 502
+
+    order = resp.json()
+    return jsonify({
+        "order_id": order["id"],
+        "amount":   order["amount"],
+        "currency": order["currency"],
+        "key_id":   RAZORPAY_KEY_ID,
+        "plan":     plan,
+    })
+
+
+@app.route("/api/verify_payment", methods=["POST"])
+def verify_payment():
+    """Verify Razorpay payment signature and upgrade the user's plan.
+    Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan }
+    """
+    payload, err = _require_auth(request)
+    if err:
+        return jsonify({"error": err}), 401
+
+    if not RAZORPAY_KEY_SECRET:
+        return jsonify({"error": "Payment not configured"}), 503
+
+    body       = request.get_json(force=True) or {}
+    order_id   = body.get("razorpay_order_id", "")
+    payment_id = body.get("razorpay_payment_id", "")
+    signature  = body.get("razorpay_signature", "")
+    plan       = body.get("plan", "")
+
+    if not all([order_id, payment_id, signature, plan]):
+        return jsonify({"error": "Missing payment fields"}), 400
+
+    if plan not in PLAN_PRICES_INR:
+        return jsonify({"error": "Invalid plan"}), 400
+
+    # Verify HMAC-SHA256 signature
+    message  = f"{order_id}|{payment_id}".encode()
+    expected = _hmac.new(
+        RAZORPAY_KEY_SECRET.encode(),
+        message,
+        _hashlib.sha256,
+    ).hexdigest()
+
+    if not _hmac.compare_digest(expected, signature):
+        return jsonify({"error": "Invalid payment signature"}), 400
+
+    # Upgrade plan in Supabase
+    user_id = payload.get("sub", "")
+    db_upsert_plan(user_id, plan)
+
+    print(f"[payment] user={payload.get('email')} upgraded to {plan} "
+          f"order={order_id} payment={payment_id}", flush=True)
+
+    return jsonify({"ok": True, "plan": plan})
+
+
+@app.route("/api/webhook/razorpay", methods=["POST"])
+def razorpay_webhook():
+    """Razorpay webhook (async confirmation — set in Razorpay dashboard).
+    Verifies X-Razorpay-Signature against RAZORPAY_WEBHOOK_SECRET env var.
+    """
+    webhook_secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+    if webhook_secret:
+        sig  = request.headers.get("X-Razorpay-Signature", "")
+        body = request.get_data()
+        expected = _hmac.new(
+            webhook_secret.encode(),
+            body,
+            _hashlib.sha256,
+        ).hexdigest()
+        if not _hmac.compare_digest(expected, sig):
+            return jsonify({"error": "Invalid webhook signature"}), 400
+
+    event = request.get_json(force=True) or {}
+    if event.get("event") == "payment.captured":
+        notes   = event.get("payload", {}).get("payment", {}).get("entity", {}).get("notes", {})
+        user_id = notes.get("user_id", "")
+        plan    = notes.get("plan", "")
+        if user_id and plan in PLAN_PRICES_INR:
+            db_upsert_plan(user_id, plan)
+            print(f"[webhook] plan upgraded user={user_id} plan={plan}", flush=True)
+
+    return jsonify({"ok": True})
+
 
 @app.route("/api/admin/users")
 def admin_list_users():

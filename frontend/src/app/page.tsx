@@ -1,4 +1,6 @@
+'use client'
 import Link from 'next/link'
+import PayButton from '@/components/PayButton'
 
 // ─── Pricing data ────────────────────────────────────────────────────────────
 const PLANS = [
@@ -307,9 +309,17 @@ export default function LandingPage() {
                     </li>
                   ))}
                 </ul>
-                <Link href="/login" style={{ ...s.planCta, background: plan.highlight ? plan.color : 'rgba(255,255,255,0.08)' }}>
-                  {plan.cta}
-                </Link>
+                {plan.name === 'Free' ? (
+                  <Link href="/login" style={{ ...s.planCta, background: 'rgba(255,255,255,0.08)', textDecoration: 'none' }}>
+                    {plan.cta}
+                  </Link>
+                ) : (
+                  <PayButton
+                    plan={plan.name.toLowerCase() as 'starter' | 'pro'}
+                    label={plan.cta}
+                    style={{ background: plan.highlight ? `linear-gradient(135deg,${plan.color},${plan.color}cc)` : undefined }}
+                  />
+                )}
               </div>
             ))}
           </div>

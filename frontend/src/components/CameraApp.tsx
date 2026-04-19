@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { createClient } from '@/lib/supabase'
 import UsageBadge, { type PlanUsage } from './UsageBadge'
+import PayButton from './PayButton'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
@@ -635,6 +636,15 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             }}>
               ⚠️ {limitMsg}
             </div>
+          )}
+          {/* Upgrade nudge for free/starter plans hitting limits */}
+          {limitMsg && planUsage?.plan === 'free' && (
+            <PayButton plan="starter" label="Upgrade to Starter — $7/mo"
+              style={{ padding: '0.35rem 0.9rem', fontSize: '0.78rem', borderRadius: 7 }} />
+          )}
+          {limitMsg && planUsage?.plan === 'starter' && (
+            <PayButton plan="pro" label="Upgrade to Pro — $18/mo"
+              style={{ padding: '0.35rem 0.9rem', fontSize: '0.78rem', borderRadius: 7 }} />
           )}
         </div>
       )}
