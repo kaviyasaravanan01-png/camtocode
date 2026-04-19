@@ -34,7 +34,7 @@ import httpx
 # ---------------------------------------------------------------------------
 # Config from environment
 # ---------------------------------------------------------------------------
-SUPABASE_URL        = os.environ.get("SUPABASE_URL", "")
+SUPABASE_URL        = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")   # service_role key
 SUPABASE_JWT_SECRET  = os.environ.get("SUPABASE_JWT_SECRET", "")    # JWT secret from dashboard
 FRONTEND_URL         = os.environ.get("FRONTEND_URL", "http://localhost:3000")
@@ -1159,13 +1159,13 @@ def list_user_exports(user_id: str):
     files = supabase_list_exports(user_id)
     result = []
     for f in files:
-        name = f.get("name", "")
-        path = _sb_export_path(user_id, name)
-        signed = supabase_signed_url(path)
+        full_path    = f.get("name", "")          # e.g. "user_id/exports/file.py"
+        display_name = full_path.split("/")[-1]   # just "file.py"
+        signed = supabase_signed_url(full_path)
         result.append({
-            "name": name,
-            "created_at": f.get("created_at", ""),
-            "size": f.get("metadata", {}).get("size", 0),
+            "name":         display_name,
+            "created_at":   f.get("created_at", ""),
+            "size":         f.get("metadata", {}).get("size", 0),
             "download_url": signed,
         })
     return jsonify({"files": result})
