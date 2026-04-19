@@ -11,60 +11,35 @@ const LANGUAGES = [
 ]
 
 interface QualityData {
-  score: number
-  label: string
-  glare: boolean
-  glare_pct: number
-  zoom: string
-  zoom_msg: string
-  frames: number
-  text?: string
-  language?: string
-  conf?: number
-  heatmap?: Array<{w: string, c: number}>
+  score: number; label: string; glare: boolean; glare_pct: number
+  zoom: string; zoom_msg: string; frames: number
+  text?: string; language?: string; conf?: number
 }
-
 interface ResultData {
-  text: string
-  lang: string
-  ai_used: boolean
-  syntax_ok: boolean
-  syntax_err?: string
-  download_url?: string
+  text: string; lang: string; ai_used: boolean
+  syntax_ok: boolean; syntax_err?: string; download_url?: string
 }
-
-interface StatusData {
-  capturing?: boolean
-  msg: string
-  bulk_block?: number
-  bulk_session?: number
-}
-
+interface StatusData { capturing?: boolean; msg: string; bulk_block?: number; bulk_session?: number }
 interface SessionFixedData {
-  text?: string
-  lang?: string
-  filename?: string
-  blocks?: number
-  session?: number
-  download_url?: string
-  error?: string
+  text?: string; lang?: string; filename?: string
+  blocks?: number; session?: number; download_url?: string; error?: string
 }
 
 export default function CameraApp({ userId, userEmail }: { userId: string; userEmail: string }) {
   const supabase = createClient()
-
-  // Socket / media refs
   const socketRef   = useRef<Socket | null>(null)
   const streamRef   = useRef<MediaStream | null>(null)
   const videoRef    = useRef<HTMLVideoElement>(null)
   const canvasRef   = useRef<HTMLCanvasElement>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // UI state
-  const [capturing,    setCapturing]    = useState(false)
   const [socketStatus, setSocketStatus] = useState<'connecting'|'connected'|'error'>('connecting')
-  const [statusMsg,    setStatusMsg]    = useState('Connecting to server...')
-  const [outputText,   setOutputText]   = useState('')
+  const [debugLog,     setDebugLog]     = useState<string[]>([])
+  const [showDebug,    setShowDebug]    = useState(false)
+  const [capturing,    setCapturing]    = useState(false)
+  const [statusMsg,    setStatusMsg]    = useState('Connecting...')
+  const [liveText,     setLiveText]     = useState('')
+  const [finalText,    setFinalText]    = useState('')
   const [qualityLabel, setQualityLabel] = useState('')
   const [qualityScore, setQualityScore] = useState(0)
   const [frames,       setFrames]       = useState(0)
@@ -74,435 +49,345 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [lastDownload, setLastDownload] = useState('')
   const [glareWarn,    setGlareWarn]    = useState(false)
   const [zoomMsg,      setZoomMsg]      = useState('')
-
-  // Video display
-  const [videoMode,  setVideoMode]  = useState<'camera' | 'screen'>('camera')
-  const [fitScreen,  setFitScreen]  = useState(false)
-
-  // Settings
-  const [language,    setLanguage]    = useState('')
-  const [aiEnabled,   setAiEnabled]   = useState(true)
-  const [nightMode,   setNightMode]   = useState(false)
-  const [autoCapture, setAutoCapture] = useState(false)
-  const [autoClear,   setAutoClear]   = useState(false)
-  const [llmModel,    setLlmModel]    = useState('haiku')
-  const [bulkCapture, setBulkCapture] = useState(false)
-  const [bulkBlocks,  setBulkBlocks]  = useState(0)
-  const [bulkSession, setBulkSession] = useState(0)
-
-  // Export modal
-  const [showExport,     setShowExport]     = useState(false)
-  const [exportFilename, setExportFilename] = useState('')
-  const [exportModel,    setExportModel]    = useState('haiku')
-  const [exporting,      setExporting]      = useState(false)
-
-  // Settings panel
+  const [aiUsed,       setAiUsed]       = useState(false)
+  const [videoMode,    setVideoMode]    = useState<'camera'|'screen'>('camera')
+  const [fitScreen,    setFitScreen]    = useState(false)
+  const [language,     setLanguage]     = useState('')
+  const [aiEnabled,    setAiEnabled]    = useState(true)
+  const [nightMode,    setNightMode]    = useState(false)
+  const [autoCapture,  setAutoCapture]  = useState(false)
+  const [autoClear,    setAutoClear]    = useState(false)
+  const [llmModel,     setLlmModel]     = useState('haiku')
+  const [bulkCapture,  setBulkCapture]  = useState(false)
+  const [bulkBlocks,   setBulkBlocks]   = useState(0)
+  const [bulkSession,  setBulkSession]  = useState(0)
+  const [showExport,   setShowExport]   = useState(false)
+  const [exportFilename,setExportFilename] = useState('')
+  const [exportModel,  setExportModel]  = useState('haiku')
+  const [exporting,    setExporting]    = useState(false)
   const [showSettings, setShowSettings] = useState(false)
 
-  // ─── Init socket ──────────────────────────────────────────────────────────
+  const addLog = useCallback((msg: string) => {
+    const ts = new Date().toLocaleTimeString()
+    setDebugLog(prev => [`${ts} ${msg}`, ...prev].slice(0, 30))
+  }, [])
+
+  // Socket init
   useEffect(() => {
-    const initSocket = async () => {
+    const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       const token = session?.access_token || ''
-
-      const sock = io(BACKEND_URL, {
-        transports: ['polling'],
-        query: { token },
-      })
+      addLog('Connecting to backend...')
+      const sock = io(BACKEND_URL, { transports: ['polling'], query: { token }, timeout: 20000 })
       socketRef.current = sock
-
-      sock.on('connect', () => {
-        setSocketStatus('connected')
-        setStatusMsg('Connected — point at code and press Start')
-        console.log('[socket] connected', sock.id)
+      sock.on('connect', () => { setSocketStatus('connected'); setStatusMsg('Ready — press Start'); addLog('Connected: ' + sock.id) })
+      sock.on('connect_error', (e) => { setSocketStatus('error'); setStatusMsg('Backend unreachable'); addLog('Error: ' + e.message) })
+      sock.on('disconnect', (r) => { setSocketStatus('connecting'); setStatusMsg('Disconnected'); addLog('Disconnected: ' + r) })
+      sock.on('init_state', (d: any) => {
+        setAiEnabled(d.ai_enabled); setNightMode(d.night_mode)
+        setAutoCapture(d.auto_capture); setAutoClear(d.auto_clear_after_export)
+        setLlmModel(d.llm_model); setBulkCapture(d.bulk_capture)
+        setBulkBlocks(d.bulk_session_blocks); setBulkSession(d.bulk_session_number)
+        addLog('State received')
       })
-      sock.on('connect_error', (e) => {
-        setSocketStatus('error')
-        setStatusMsg('Backend connection failed: ' + e.message)
-        console.error('[socket] connect_error', e)
+      sock.on('status', (d: StatusData) => {
+        setStatusMsg(d.msg); addLog('status: ' + d.msg)
+        if (typeof d.capturing === 'boolean') setCapturing(d.capturing)
+        if (d.bulk_block  !== undefined) setBulkBlocks(d.bulk_block)
+        if (d.bulk_session !== undefined) setBulkSession(d.bulk_session)
       })
-      sock.on('disconnect', (reason) => {
-        setSocketStatus('connecting')
-        setStatusMsg('Disconnected: ' + reason)
-        console.warn('[socket] disconnected', reason)
+      sock.on('quality', (d: QualityData) => {
+        setQualityLabel(d.label); setQualityScore(d.score)
+        setFrames(d.frames); setGlareWarn(d.glare); setZoomMsg(d.zoom_msg || '')
+        if (d.text) { setLiveText(d.text); if (d.language) setLastLang(d.language); addLog('frame ' + d.frames + ' got text') }
+        else { addLog('frame ' + d.frames + ' ' + d.label + ' ' + d.score.toFixed(0)) }
       })
-
-      sock.on('init_state', (data: any) => {
-        setAiEnabled(data.ai_enabled)
-        setNightMode(data.night_mode)
-        setAutoCapture(data.auto_capture)
-        setAutoClear(data.auto_clear_after_export)
-        setLlmModel(data.llm_model)
-        setBulkCapture(data.bulk_capture)
-        setBulkBlocks(data.bulk_session_blocks)
-        setBulkSession(data.bulk_session_number)
+      sock.on('result', (d: ResultData) => {
+        setFinalText(d.text); setLiveText('')
+        setLastLang(d.lang); setAiUsed(d.ai_used)
+        setSyntaxOk(d.syntax_ok); setSyntaxErr(d.syntax_err || '')
+        if (d.download_url) setLastDownload(d.download_url)
+        addLog('result: ' + d.lang + ' ai=' + d.ai_used)
       })
-
-      sock.on('status', (data: StatusData) => {
-        setStatusMsg(data.msg)
-        if (typeof data.capturing === 'boolean') setCapturing(data.capturing)
-        if (data.bulk_block !== undefined) setBulkBlocks(data.bulk_block)
-        if (data.bulk_session !== undefined) setBulkSession(data.bulk_session)
+      sock.on('auto_captured', () => { addLog('auto_captured'); handleStopRef.current?.() })
+      sock.on('session_fixed', (d: SessionFixedData) => {
+        setExporting(false); setShowExport(false)
+        if (d.error) { setStatusMsg('Export error: ' + d.error); return }
+        if (d.text) setFinalText(d.text)
+        if (d.download_url) setLastDownload(d.download_url)
+        setStatusMsg('Exported: ' + d.filename); addLog('exported: ' + d.filename)
       })
-
-      sock.on('quality', (data: QualityData) => {
-        setQualityLabel(data.label)
-        setQualityScore(data.score)
-        setFrames(data.frames)
-        setGlareWarn(data.glare)
-        setZoomMsg(data.zoom_msg || '')
-        if (data.text) {
-          setOutputText(data.text)
-          if (data.language) setLastLang(data.language)
-        }
-      })
-
-      sock.on('result', (data: ResultData) => {
-        setOutputText(data.text)
-        setLastLang(data.lang)
-        setSyntaxOk(data.syntax_ok)
-        setSyntaxErr(data.syntax_err || '')
-        if (data.download_url) setLastDownload(data.download_url)
-      })
-
-      sock.on('auto_captured', () => handleStopRef.current?.())
-
-      sock.on('session_fixed', (data: SessionFixedData) => {
-        setExporting(false)
-        setShowExport(false)
-        if (data.error) { setStatusMsg('Export error: ' + data.error); return }
-        if (data.text) setOutputText(data.text)
-        if (data.download_url) setLastDownload(data.download_url)
-        setStatusMsg(`Session ${data.session} exported as ${data.filename}`)
-      })
-
-      sock.on('language_set', (data: {language: string}) => {
-        setLanguage(data.language === 'auto' ? '' : data.language)
-      })
+      sock.on('language_set', (d: {language: string}) => setLanguage(d.language === 'auto' ? '' : d.language))
     }
-
-    initSocket()
+    init()
     return () => { socketRef.current?.disconnect(); stopStream() }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line
 
-  // ─── Camera init ──────────────────────────────────────────────────────────
   const startCamera = useCallback(async () => {
     stopStream()
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false,
       })
       streamRef.current = stream
       if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play() }
-      setVideoMode('camera')
-      setStatusMsg('Camera ready — point at code and press Start')
-    } catch (e: any) {
-      setStatusMsg('Camera error: ' + e.message)
-    }
-  }, [])
+      setVideoMode('camera'); addLog('Camera started')
+    } catch (e: any) { addLog('Camera error: ' + e.message); setStatusMsg('Camera error: ' + e.message) }
+  }, []) // eslint-disable-line
 
-  // ─── Screen capture ───────────────────────────────────────────────────────
   const startScreenCapture = useCallback(async () => {
     stopStream()
     try {
-      const stream = await (navigator.mediaDevices as any).getDisplayMedia({
-        video: { cursor: 'always' },
-        audio: false,
-      })
+      const stream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false })
       streamRef.current = stream
       if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play() }
-      setVideoMode('screen')
-      setFitScreen(true)
-      setStatusMsg('Screen selected — press Start to capture')
-
-      // Auto-revert to camera if user stops sharing
-      stream.getVideoTracks()[0].addEventListener('ended', () => {
-        setVideoMode('camera')
-        startCamera()
-      })
+      setVideoMode('screen'); setFitScreen(true); addLog('Screen capture started')
+      stream.getVideoTracks()[0].addEventListener('ended', () => { setVideoMode('camera'); startCamera() })
     } catch (e: any) {
-      if (e.name !== 'NotAllowedError') setStatusMsg('Screen capture error: ' + e.message)
+      if (e.name !== 'NotAllowedError') addLog('Screen error: ' + e.message)
       startCamera()
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, []) // eslint-disable-line
 
-  const stopStream = () => {
-    streamRef.current?.getTracks().forEach(t => t.stop())
-    streamRef.current = null
-  }
-
+  const stopStream = () => { streamRef.current?.getTracks().forEach(t => t.stop()); streamRef.current = null }
   useEffect(() => { startCamera() }, [startCamera])
 
-  const stopCapturing = useCallback(() => {
-    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null }
-  }, [])
-
-  // ─── Capture helpers ──────────────────────────────────────────────────────
   const captureFrame = useCallback(() => {
     const video = videoRef.current; const canvas = canvasRef.current
-    if (!video || !canvas || !socketRef.current) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!video || !canvas || !socketRef.current?.connected) return
+    if (!video.videoWidth || !video.videoHeight) return
+    const ctx = canvas.getContext('2d'); if (!ctx) return
     canvas.width = video.videoWidth; canvas.height = video.videoHeight
     ctx.drawImage(video, 0, 0)
     socketRef.current.emit('frame', { image: canvas.toDataURL('image/jpeg', 0.85) })
   }, [])
 
   const handleStart = useCallback(() => {
-    if (!socketRef.current) return
+    if (!socketRef.current?.connected) { addLog('Cannot start: not connected'); return }
+    addLog('Emitting start')
     socketRef.current.emit('start')
-    setCapturing(true); setFrames(0); setSyntaxOk(null); setSyntaxErr('')
-    intervalRef.current = setInterval(captureFrame, 400)
-  }, [captureFrame])
+    setCapturing(true); setFrames(0); setLiveText(''); setSyntaxOk(null); setSyntaxErr('')
+    intervalRef.current = setInterval(captureFrame, 500)
+  }, [captureFrame]) // eslint-disable-line
 
   const handleStop = useCallback(() => {
-    if (!socketRef.current) return
-    stopCapturing()
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null }
     setCapturing(false)
-    socketRef.current.emit('stop')
-  }, [stopCapturing])
+    if (socketRef.current?.connected) { addLog('Emitting stop'); socketRef.current.emit('stop') }
+  }, [])
 
-  // Stable ref so auto_captured callback can call handleStop
   const handleStopRef = useRef(handleStop)
   useEffect(() => { handleStopRef.current = handleStop }, [handleStop])
 
   const handlePhoto = useCallback(() => {
     const video = videoRef.current; const canvas = canvasRef.current
-    if (!video || !canvas || !socketRef.current) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
+    if (!video || !canvas || !socketRef.current?.connected) return
+    const ctx = canvas.getContext('2d'); if (!ctx) return
     canvas.width = video.videoWidth; canvas.height = video.videoHeight
     ctx.drawImage(video, 0, 0)
+    addLog('Emitting photo')
     socketRef.current.emit('photo', { image: canvas.toDataURL('image/jpeg', 0.95) })
   }, [])
 
-  // ─── Settings emitters ────────────────────────────────────────────────────
-  const emit = (event: string, data?: object) => socketRef.current?.emit(event, data)
+  const emit = (ev: string, data?: object) => socketRef.current?.emit(ev, data)
+  const handleLanguageChange  = (l: string) => { setLanguage(l);    emit('set_language',    { language: l }) }
+  const handleAiToggle        = () => { const n = !aiEnabled;   setAiEnabled(n);   emit('set_ai',        { enabled: n }) }
+  const handleNightToggle     = () => { const n = !nightMode;   setNightMode(n);   emit('set_night',     { enabled: n }) }
+  const handleAutoToggle      = () => { const n = !autoCapture; setAutoCapture(n); emit('set_auto',      { enabled: n }) }
+  const handleAutoClearToggle = () => { const n = !autoClear;   setAutoClear(n);   emit('set_auto_clear',{ enabled: n }) }
+  const handleModelChange     = (m: string) => { setLlmModel(m);   emit('set_model',       { model: m }) }
+  const handleBulkToggle      = () => { const n = !bulkCapture; setBulkCapture(n); emit('set_bulk',      { enabled: n }) }
+  const handleResetBulk       = () => { emit('reset_bulk_session'); setBulkBlocks(0) }
 
-  const handleLanguageChange = (lang: string) => { setLanguage(lang); emit('set_language', { language: lang }) }
-  const handleAiToggle       = () => { const n = !aiEnabled;   setAiEnabled(n);   emit('set_ai',        { enabled: n }) }
-  const handleNightToggle    = () => { const n = !nightMode;   setNightMode(n);   emit('set_night',     { enabled: n }) }
-  const handleAutoToggle     = () => { const n = !autoCapture; setAutoCapture(n); emit('set_auto',      { enabled: n }) }
-  const handleAutoClearToggle= () => { const n = !autoClear;   setAutoClear(n);   emit('set_auto_clear',{ enabled: n }) }
-  const handleModelChange    = (model: string) => { setLlmModel(model); emit('set_model', { model }) }
-  const handleBulkToggle     = () => { const n = !bulkCapture; setBulkCapture(n); emit('set_bulk', { enabled: n }) }
-  const handleResetBulk      = () => { emit('reset_bulk_session'); setBulkBlocks(0) }
-
-  // ─── Copy / Export ────────────────────────────────────────────────────────
-  const handleCopy = () => {
-    if (!outputText) return
-    navigator.clipboard.writeText(outputText).then(() => setStatusMsg('Copied to clipboard!'))
-  }
-
-  const handleExportSubmit = () => {
-    setExporting(true)
-    emit('fix_session_file', { filename: exportFilename, ai_fix: true, model: exportModel })
-  }
-
-  // ─── Sign out ─────────────────────────────────────────────────────────────
+  const handleCopy = (text: string) => navigator.clipboard.writeText(text).then(() => setStatusMsg('Copied!'))
+  const handleExportSubmit = () => { setExporting(true); emit('fix_session_file', { filename: exportFilename, ai_fix: true, model: exportModel }) }
   const handleSignOut = async () => { await supabase.auth.signOut(); window.location.href = '/' }
 
-  // ─── Quality color ────────────────────────────────────────────────────────
-  const qualityColor = qualityLabel === 'sharp' ? '#22c55e'
-    : qualityLabel === 'ok'     ? '#eab308'
-    : qualityLabel === 'blurry' ? '#ef4444'
-    : '#888'
+  const qColor = qualityLabel === 'sharp' ? '#22c55e' : qualityLabel === 'ok' ? '#eab308' : qualityLabel === 'blurry' ? '#ef4444' : '#888'
+  const dotColor = socketStatus === 'connected' ? '#22c55e' : socketStatus === 'error' ? '#ef4444' : '#eab308'
+  const outputText = finalText || liveText
 
   return (
     <div style={s.root}>
-      {/* ── Header ──────────────────────────────────── */}
+      {/* Header */}
       <div style={s.header}>
-        <span style={s.logoText}>CamToCode</span>
-        <div style={s.headerRight}>
-          <span style={{
-            width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
-            background: socketStatus === 'connected' ? '#22c55e' : socketStatus === 'error' ? '#ef4444' : '#eab308',
-            title: socketStatus,
-          }} />
+        <span style={s.logo}>CamToCode</span>
+        <div style={s.hRight}>
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
+          <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug log">🪲</button>
           <a href="/history" style={s.historyLink}>History</a>
-          <button onClick={() => setShowSettings(!showSettings)} style={s.iconBtn} title="Settings">⚙️</button>
+          <button onClick={() => setShowSettings(v => !v)} style={s.iconBtn}>⚙️</button>
           <button onClick={handleSignOut} style={s.signOutBtn}>Sign Out</button>
         </div>
       </div>
 
-      {/* ── Settings Panel ──────────────────────────── */}
+      {/* Debug log — on-screen console for mobile */}
+      {showDebug && (
+        <div style={s.debugPanel}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+            <span style={{ fontWeight: 700, fontSize: '0.72rem', color: '#a78bfa' }}>
+              Debug Log — {socketStatus} — {BACKEND_URL}
+            </span>
+            <button onClick={() => setDebugLog([])} style={s.smallBtn}>Clear</button>
+          </div>
+          {debugLog.length === 0
+            ? <div style={{ opacity: 0.4, fontSize: '0.68rem' }}>No events yet</div>
+            : debugLog.map((l, i) => (
+                <div key={i} style={{ fontSize: '0.66rem', fontFamily: 'monospace', borderBottom: '1px solid rgba(255,255,255,0.04)', padding: '2px 0', lineHeight: 1.4 }}>
+                  {l}
+                </div>
+              ))
+          }
+        </div>
+      )}
+
+      {/* Settings */}
       {showSettings && (
         <div style={s.settingsPanel}>
-          <div style={s.settingsRow}>
+          <div style={s.row}>
             <span>Language</span>
             <select value={language} onChange={e => handleLanguageChange(e.target.value)} style={s.select}>
               <option value="">Auto Detect</option>
-              {LANGUAGES.filter(Boolean).map(l => (
-                <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>
-              ))}
+              {LANGUAGES.filter(Boolean).map(l => <option key={l} value={l}>{l.charAt(0).toUpperCase() + l.slice(1)}</option>)}
             </select>
           </div>
-          <div style={s.settingsRow}>
-            <span>Claude AI OCR</span>
-            <label style={s.toggle}>
-              <input type="checkbox" checked={aiEnabled} onChange={handleAiToggle} style={s.toggleInput} />
-              <span style={{ ...s.toggleSlider, background: aiEnabled ? '#4f46e5' : '#374151' }} />
-            </label>
-          </div>
-          <div style={s.settingsRow}>
-            <span>Night Mode</span>
-            <label style={s.toggle}>
-              <input type="checkbox" checked={nightMode} onChange={handleNightToggle} style={s.toggleInput} />
-              <span style={{ ...s.toggleSlider, background: nightMode ? '#4f46e5' : '#374151' }} />
-            </label>
-          </div>
-          <div style={s.settingsRow}>
-            <span>Auto Capture</span>
-            <label style={s.toggle}>
-              <input type="checkbox" checked={autoCapture} onChange={handleAutoToggle} style={s.toggleInput} />
-              <span style={{ ...s.toggleSlider, background: autoCapture ? '#4f46e5' : '#374151' }} />
-            </label>
-          </div>
-          <div style={s.settingsRow}>
-            <span>Auto Clear After Export</span>
-            <label style={s.toggle}>
-              <input type="checkbox" checked={autoClear} onChange={handleAutoClearToggle} style={s.toggleInput} />
-              <span style={{ ...s.toggleSlider, background: autoClear ? '#4f46e5' : '#374151' }} />
-            </label>
-          </div>
-          <div style={s.settingsRow}>
+          {([
+            ['Claude AI OCR', aiEnabled,   handleAiToggle],
+            ['Night Mode',    nightMode,   handleNightToggle],
+            ['Auto Capture',  autoCapture, handleAutoToggle],
+            ['Auto Clear',    autoClear,   handleAutoClearToggle],
+            ['Bulk Capture',  bulkCapture, handleBulkToggle],
+          ] as [string, boolean, () => void][]).map(([label, val, fn]) => (
+            <div key={label} style={s.row}>
+              <span>{label}</span>
+              <label style={s.toggle}>
+                <input type="checkbox" checked={val} onChange={fn} style={s.toggleInput} />
+                <span style={{ ...s.toggleSlider, background: val ? '#4f46e5' : '#374151' }} />
+              </label>
+            </div>
+          ))}
+          <div style={s.row}>
             <span>LLM Model</span>
             <select value={llmModel} onChange={e => handleModelChange(e.target.value)} style={s.select}>
               <option value="haiku">Haiku (Fast)</option>
               <option value="sonnet">Sonnet (Best)</option>
             </select>
           </div>
-          <div style={s.settingsRow}>
-            <span>Bulk Capture</span>
-            <label style={s.toggle}>
-              <input type="checkbox" checked={bulkCapture} onChange={handleBulkToggle} style={s.toggleInput} />
-              <span style={{ ...s.toggleSlider, background: bulkCapture ? '#4f46e5' : '#374151' }} />
-            </label>
-          </div>
-          {bulkCapture && (
-            <div style={s.settingsRow}>
+          {bulkCapture && <>
+            <div style={s.row}>
               <span>Session {bulkSession} — {bulkBlocks} blocks</span>
               <button onClick={handleResetBulk} style={s.smallBtn}>Reset</button>
             </div>
-          )}
-          {bulkCapture && (
-            <div style={s.settingsRow}>
-              <span>&nbsp;</span>
+            <div style={s.row}>
+              <span />
               <button onClick={() => setShowExport(true)} style={s.exportBtn}>Export Session</button>
             </div>
-          )}
+          </>}
         </div>
       )}
 
-      {/* ── Camera / Screen toolbar ─────────────────── */}
-      <div style={s.videoToolbar}>
-        <div style={s.videoToolbarLeft}>
-          <button
-            onClick={videoMode === 'camera' ? startScreenCapture : startCamera}
-            style={s.toolbarBtn}
-            title={videoMode === 'camera' ? 'Switch to screen capture' : 'Switch to camera'}
-          >
-            {videoMode === 'camera' ? '🖥 Share Screen' : '📷 Use Camera'}
+      {/* Video toolbar */}
+      <div style={s.toolbar}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={videoMode === 'camera' ? startScreenCapture : startCamera} style={s.toolBtn}>
+            {videoMode === 'camera' ? '🖥 Screen' : '📷 Camera'}
           </button>
           <button
             onClick={() => setFitScreen(f => !f)}
-            style={{ ...s.toolbarBtn, background: fitScreen ? 'rgba(99,102,241,0.3)' : undefined }}
-            title="Toggle fit screen"
+            style={{ ...s.toolBtn, background: fitScreen ? 'rgba(99,102,241,0.3)' : 'rgba(255,255,255,0.07)' }}
           >
             {fitScreen ? '⊡ Fit' : '⊞ Fill'}
           </button>
         </div>
-        {videoMode === 'screen' && (
-          <span style={s.videoModeTag}>🖥 Screen</span>
-        )}
+        {videoMode === 'screen' && <span style={s.modeTag}>🖥 Screen</span>}
       </div>
 
-      {/* ── Video ───────────────────────────────────── */}
-      <div style={s.cameraWrap}>
-        <video
-          ref={videoRef}
-          playsInline
-          muted
-          style={{ ...s.video, objectFit: fitScreen ? 'contain' : 'cover' }}
-        />
+      {/* Video */}
+      <div style={s.camWrap}>
+        <video ref={videoRef} playsInline muted style={{ ...s.video, objectFit: fitScreen ? 'contain' : 'cover' }} />
         <canvas ref={canvasRef} style={{ display: 'none' }} />
-
-        {/* Quality badge */}
         {qualityLabel && (
-          <div style={{ ...s.qualityBadge, borderColor: qualityColor, color: qualityColor }}>
-            {qualityLabel.toUpperCase()} {qualityScore.toFixed(0)} | {frames} frames
+          <div style={{ ...s.badge, borderColor: qColor, color: qColor }}>
+            {qualityLabel.toUpperCase()} {qualityScore.toFixed(0)} | {frames}f
           </div>
         )}
-
-        {/* Glare warning */}
-        {glareWarn && (
-          <div style={s.glareWarn}>⚠ Glare detected — adjust angle</div>
-        )}
-
-        {/* Zoom hint */}
-        {zoomMsg && (
-          <div style={s.zoomHint}>{zoomMsg}</div>
-        )}
+        {glareWarn && <div style={s.glare}>⚠ Glare</div>}
+        {zoomMsg   && <div style={s.zoom}>{zoomMsg}</div>}
+        {capturing && <div style={s.liveDot}>● LIVE</div>}
       </div>
 
-      {/* ── Controls ────────────────────────────────── */}
+      {/* Controls */}
       <div style={s.controls}>
         {!capturing ? (
           <>
-            <button onClick={handleStart} style={s.startBtn}>▶ Start</button>
-            <button onClick={handlePhoto} style={s.photoBtn}>📷 Photo</button>
+            <button onClick={handleStart} disabled={socketStatus !== 'connected'}
+              style={{ ...s.startBtn, opacity: socketStatus !== 'connected' ? 0.5 : 1 }}>
+              ▶ Start
+            </button>
+            <button onClick={handlePhoto} disabled={socketStatus !== 'connected'}
+              style={{ ...s.photoBtn, opacity: socketStatus !== 'connected' ? 0.5 : 1 }}>
+              📷 Photo
+            </button>
           </>
         ) : (
           <button onClick={handleStop} style={s.stopBtn}>⏹ Stop</button>
         )}
       </div>
 
-      {/* ── Status bar ──────────────────────────────── */}
+      {/* Status */}
       <div style={s.statusBar}>
         <span style={{ flex: 1 }}>{statusMsg}</span>
-        {lastLang && <span style={s.langTag}>{lastLang}</span>}
-        {syntaxOk === false && <span style={s.syntaxError}>⚠ {syntaxErr}</span>}
+        {lastLang  && <span style={s.langTag}>{lastLang}{aiUsed ? ' ✨' : ''}</span>}
+        {syntaxOk === false && <span style={s.syntaxErr}>⚠ {syntaxErr}</span>}
         {syntaxOk === true  && <span style={s.syntaxOk}>✓ Syntax OK</span>}
       </div>
 
-      {/* ── Output ──────────────────────────────────── */}
-      {outputText && (
-        <div style={s.outputWrap}>
-          <div style={s.outputHeader}>
-            <span>Output {lastLang && `— ${lastLang}`}</span>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={handleCopy} style={s.smallBtn}>Copy</button>
-              <button onClick={() => setOutputText('')} style={s.smallBtn}>Clear</button>
-              {lastDownload && (
-                <a href={lastDownload} download style={{ textDecoration: 'none' }}>
-                  <button style={s.smallBtn}>↓ Download</button>
-                </a>
-              )}
-            </div>
+      {/* Output — always visible */}
+      <div style={s.outputWrap}>
+        <div style={s.outputHeader}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {capturing && liveText
+              ? <><span style={{ color: '#22c55e' }}>⬤</span> Live OCR</>
+              : finalText
+                ? <>Result {aiUsed && <span style={{ color: '#a78bfa', fontSize: '0.7rem' }}>✨ AI</span>}</>
+                : 'Output'
+            }
+            {lastLang && <span style={s.langTag}>{lastLang}</span>}
+          </span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {outputText && <button onClick={() => handleCopy(outputText)} style={s.smallBtn}>Copy</button>}
+            {outputText && <button onClick={() => { setFinalText(''); setLiveText('') }} style={s.smallBtn}>Clear</button>}
+            {lastDownload && (
+              <a href={lastDownload} download style={{ textDecoration: 'none' }}>
+                <button style={s.smallBtn}>↓ DL</button>
+              </a>
+            )}
           </div>
-          <pre style={s.output}>{outputText}</pre>
         </div>
-      )}
+        <pre style={s.output}>
+          {outputText
+            || (capturing ? 'Waiting for frames...'
+            : socketStatus === 'connected' ? 'Press Start or Photo to capture code'
+            : 'Connecting to backend...')}
+        </pre>
+      </div>
 
-      {/* ── Export Modal ────────────────────────────── */}
+      {/* Export Modal */}
       {showExport && (
-        <div style={s.modalBackdrop} onClick={() => !exporting && setShowExport(false)}>
+        <div style={s.backdrop} onClick={() => !exporting && setShowExport(false)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
             <h3 style={{ marginBottom: '1rem' }}>Export Session</h3>
-            <p style={s.modalNote}>Session {bulkSession} · {bulkBlocks} block{bulkBlocks !== 1 ? 's' : ''}</p>
-            <input
-              type="text"
-              placeholder="Filename (optional)"
-              value={exportFilename}
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', marginBottom: '1rem' }}>
+              Session {bulkSession} · {bulkBlocks} blocks
+            </p>
+            <input type="text" placeholder="Filename (optional)" value={exportFilename}
               onChange={e => setExportFilename(e.target.value)}
-              style={{ ...s.input, width: '100%', marginBottom: '0.75rem' }}
-            />
-            <div style={s.settingsRow}>
+              style={{ ...s.input, width: '100%', marginBottom: '0.75rem' }} />
+            <div style={s.row}>
               <span>Model</span>
               <select value={exportModel} onChange={e => setExportModel(e.target.value)} style={s.select}>
                 <option value="haiku">Haiku (Fast)</option>
-                <option value="sonnet">Sonnet (Best quality)</option>
+                <option value="sonnet">Sonnet (Best)</option>
               </select>
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: '1rem' }}>
@@ -518,159 +403,45 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   )
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
 const s: Record<string, React.CSSProperties> = {
-  root: {
-    minHeight: '100vh',
-    background: '#1a1a2e',
-    color: '#e2e8f0',
-    display: 'flex',
-    flexDirection: 'column',
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-  },
-  header: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '0.75rem 1rem',
-    background: 'rgba(0,0,0,0.3)',
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
-  },
-  logoText: {
-    fontWeight: 800, fontSize: '1.2rem',
-    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-  },
-  headerRight: { display: 'flex', alignItems: 'center', gap: 10 },
-  historyLink: { color: '#818cf8', fontSize: '0.875rem', textDecoration: 'none' },
-  iconBtn: {
-    background: 'transparent', border: 'none',
-    fontSize: '1.2rem', padding: '0.3rem', cursor: 'pointer', borderRadius: '50%',
-  },
-  signOutBtn: {
-    background: 'rgba(239,68,68,0.2)', color: '#fca5a5',
-    border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
-    padding: '0.35rem 0.75rem', fontSize: '0.8rem', cursor: 'pointer',
-  },
-  settingsPanel: {
-    background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid rgba(255,255,255,0.08)',
-    padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: 10,
-  },
-  settingsRow: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.875rem',
-  },
-  select: {
-    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 8, color: '#e2e8f0', padding: '0.3rem 0.5rem', fontSize: '0.8rem',
-  },
-  toggle: { position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' },
-  toggleInput: { position: 'absolute', opacity: 0, width: 0, height: 0 },
+  root:         { minHeight: '100vh', background: '#1a1a2e', color: '#e2e8f0', display: 'flex', flexDirection: 'column', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' },
+  header:       { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 1rem', background: 'rgba(0,0,0,0.35)', borderBottom: '1px solid rgba(255,255,255,0.08)' },
+  logo:         { fontWeight: 800, fontSize: '1.1rem', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' },
+  hRight:       { display: 'flex', alignItems: 'center', gap: 8 },
+  historyLink:  { color: '#818cf8', fontSize: '0.8rem', textDecoration: 'none' },
+  iconBtn:      { background: 'transparent', border: 'none', fontSize: '1.1rem', padding: '0.25rem', cursor: 'pointer' },
+  signOutBtn:   { background: 'rgba(239,68,68,0.2)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '0.3rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' },
+  debugPanel:   { background: '#0a0a1a', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.5rem 0.75rem', maxHeight: 200, overflowY: 'auto' },
+  settingsPanel:{ background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: 10 },
+  row:          { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.875rem' },
+  select:       { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#e2e8f0', padding: '0.3rem 0.5rem', fontSize: '0.8rem' },
+  toggle:       { position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' },
+  toggleInput:  { position: 'absolute', opacity: 0, width: 0, height: 0 },
   toggleSlider: { position: 'absolute', inset: 0, borderRadius: 12, transition: '0.3s' },
-  videoToolbar: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '0.4rem 0.75rem',
-    background: 'rgba(0,0,0,0.25)',
-    borderBottom: '1px solid rgba(255,255,255,0.06)',
-  },
-  videoToolbarLeft: { display: 'flex', gap: 8 },
-  toolbarBtn: {
-    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)',
-    color: '#e2e8f0', borderRadius: 8, padding: '0.3rem 0.75rem',
-    fontSize: '0.78rem', cursor: 'pointer',
-  },
-  videoModeTag: {
-    background: 'rgba(99,102,241,0.25)', color: '#818cf8',
-    borderRadius: 6, padding: '2px 8px', fontSize: '0.75rem',
-  },
-  cameraWrap: {
-    position: 'relative', flex: '1 0 auto', maxHeight: '50vh',
-    background: '#000', overflow: 'hidden',
-  },
-  video: { width: '100%', height: '100%' },
-  qualityBadge: {
-    position: 'absolute', top: 8, right: 8,
-    border: '1px solid', borderRadius: 6, padding: '2px 8px',
-    fontSize: '0.7rem', background: 'rgba(0,0,0,0.6)', fontFamily: 'monospace',
-  },
-  glareWarn: {
-    position: 'absolute', bottom: 8, left: 8,
-    background: 'rgba(234,179,8,0.85)', color: '#000',
-    borderRadius: 6, padding: '3px 10px', fontSize: '0.75rem', fontWeight: 600,
-  },
-  zoomHint: {
-    position: 'absolute', bottom: 8, right: 8,
-    background: 'rgba(0,0,0,0.7)', color: '#fbbf24',
-    borderRadius: 6, padding: '3px 10px', fontSize: '0.75rem',
-  },
-  controls: {
-    display: 'flex', gap: 12, padding: '0.75rem 1rem', justifyContent: 'center',
-  },
-  startBtn: {
-    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-    color: '#fff', padding: '0.75rem 2.5rem', fontSize: '1rem',
-    fontWeight: 700, borderRadius: 50, minWidth: 140, cursor: 'pointer', border: 'none',
-  },
-  stopBtn: {
-    background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-    color: '#fff', padding: '0.75rem 2.5rem', fontSize: '1rem',
-    fontWeight: 700, borderRadius: 50, minWidth: 140, cursor: 'pointer', border: 'none',
-  },
-  photoBtn: {
-    background: 'rgba(255,255,255,0.08)', color: '#e2e8f0',
-    border: '1px solid rgba(255,255,255,0.15)', borderRadius: 50,
-    padding: '0.75rem 1.5rem', fontWeight: 600, cursor: 'pointer',
-  },
-  statusBar: {
-    padding: '0.5rem 1rem', fontSize: '0.8rem', color: 'rgba(255,255,255,0.6)',
-    background: 'rgba(0,0,0,0.3)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
-  },
-  langTag: {
-    background: 'rgba(99,102,241,0.25)', color: '#818cf8',
-    borderRadius: 4, padding: '1px 6px', fontSize: '0.75rem',
-  },
-  syntaxError: { color: '#fca5a5', fontSize: '0.75rem' },
-  syntaxOk:    { color: '#86efac', fontSize: '0.75rem' },
-  outputWrap: {
-    margin: '0.75rem 1rem',
-    background: 'rgba(0,0,0,0.4)', borderRadius: 12,
-    border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden',
-  },
-  outputHeader: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '0.5rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.06)',
-    fontSize: '0.8rem', color: 'rgba(255,255,255,0.5)',
-  },
-  output: {
-    padding: '0.75rem', fontSize: '0.8rem',
-    fontFamily: '"JetBrains Mono", "Fira Code", Consolas, monospace',
-    whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-    maxHeight: 300, overflowY: 'auto', color: '#e2e8f0', margin: 0,
-  },
-  smallBtn: {
-    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
-    color: '#e2e8f0', borderRadius: 8, padding: '0.25rem 0.75rem',
-    fontSize: '0.8rem', cursor: 'pointer',
-  },
-  exportBtn: {
-    background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-    color: '#fff', borderRadius: 8, padding: '0.35rem 0.9rem',
-    fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', border: 'none',
-  },
-  cancelBtn: {
-    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
-    color: '#e2e8f0', borderRadius: 8, padding: '0.35rem 0.9rem',
-    fontSize: '0.8rem', cursor: 'pointer',
-  },
-  input: {
-    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 10, color: '#fff', padding: '0.6rem 0.75rem', fontSize: '0.875rem',
-    boxSizing: 'border-box',
-  },
-  modalBackdrop: {
-    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem',
-  },
-  modal: {
-    background: '#1e1e3a', border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 16, padding: '1.5rem', width: '100%', maxWidth: 400,
-  },
-  modalNote: { color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', marginBottom: '1rem' },
+  toolbar:      { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.35rem 0.75rem', background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.05)' },
+  toolBtn:      { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', borderRadius: 8, padding: '0.25rem 0.7rem', fontSize: '0.75rem', cursor: 'pointer' },
+  modeTag:      { background: 'rgba(99,102,241,0.25)', color: '#818cf8', borderRadius: 6, padding: '2px 8px', fontSize: '0.72rem' },
+  camWrap:      { position: 'relative', flex: '1 0 auto', maxHeight: '40vh', background: '#000', overflow: 'hidden' },
+  video:        { width: '100%', height: '100%' },
+  badge:        { position: 'absolute', top: 8, right: 8, border: '1px solid', borderRadius: 6, padding: '2px 8px', fontSize: '0.68rem', background: 'rgba(0,0,0,0.65)', fontFamily: 'monospace' },
+  glare:        { position: 'absolute', bottom: 8, left: 8, background: 'rgba(234,179,8,0.9)', color: '#000', borderRadius: 6, padding: '3px 10px', fontSize: '0.72rem', fontWeight: 700 },
+  zoom:         { position: 'absolute', bottom: 8, right: 8, background: 'rgba(0,0,0,0.75)', color: '#fbbf24', borderRadius: 6, padding: '3px 10px', fontSize: '0.72rem' },
+  liveDot:      { position: 'absolute', top: 8, left: 8, background: 'rgba(239,68,68,0.85)', color: '#fff', borderRadius: 6, padding: '2px 8px', fontSize: '0.68rem', fontWeight: 700 },
+  controls:     { display: 'flex', gap: 10, padding: '0.6rem 1rem', justifyContent: 'center' },
+  startBtn:     { background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', color: '#fff', padding: '0.7rem 2rem', fontSize: '0.95rem', fontWeight: 700, borderRadius: 50, minWidth: 120, cursor: 'pointer', border: 'none' },
+  stopBtn:      { background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: '#fff', padding: '0.7rem 2rem', fontSize: '0.95rem', fontWeight: 700, borderRadius: 50, minWidth: 120, cursor: 'pointer', border: 'none' },
+  photoBtn:     { background: 'rgba(255,255,255,0.08)', color: '#e2e8f0', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 50, padding: '0.7rem 1.2rem', fontWeight: 600, cursor: 'pointer' },
+  statusBar:    { padding: '0.4rem 1rem', fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', background: 'rgba(0,0,0,0.3)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  langTag:      { background: 'rgba(99,102,241,0.25)', color: '#818cf8', borderRadius: 4, padding: '1px 6px', fontSize: '0.72rem' },
+  syntaxErr:    { color: '#fca5a5', fontSize: '0.72rem' },
+  syntaxOk:     { color: '#86efac', fontSize: '0.72rem' },
+  outputWrap:   { margin: '0.6rem 0.75rem', background: 'rgba(0,0,0,0.4)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden' },
+  outputHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.45rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' },
+  output:       { padding: '0.6rem 0.75rem', fontSize: '0.78rem', fontFamily: '"JetBrains Mono","Fira Code",Consolas,monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 250, overflowY: 'auto', color: '#e2e8f0', margin: 0 },
+  smallBtn:     { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#e2e8f0', borderRadius: 7, padding: '0.2rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' },
+  exportBtn:    { background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', color: '#fff', borderRadius: 8, padding: '0.35rem 0.85rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', border: 'none' },
+  cancelBtn:    { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', borderRadius: 8, padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: 'pointer' },
+  input:        { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, color: '#fff', padding: '0.55rem 0.75rem', fontSize: '0.875rem', boxSizing: 'border-box' },
+  backdrop:     { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' },
+  modal:        { background: '#1e1e3a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 16, padding: '1.5rem', width: '100%', maxWidth: 400 },
 }
