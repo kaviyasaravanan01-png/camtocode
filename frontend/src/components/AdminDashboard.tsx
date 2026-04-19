@@ -228,7 +228,23 @@ export default function AdminDashboard({ userEmail }: { userEmail: string }) {
                       {' · '}{f.size >= 1024 ? `${(f.size / 1024).toFixed(1)} KB` : `${f.size} B`}
                     </p>
                   </div>
-                  <a href={f.download_url} style={s.dlBtn} target="_blank" rel="noreferrer">↓</a>
+                  <button
+                    style={{ ...s.dlBtn, border: 'none', cursor: 'pointer' }}
+                    onClick={async () => {
+                      try {
+                        const res = await fetch(f.download_url)
+                        const blob = await res.blob()
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = f.name
+                        document.body.appendChild(a)
+                        a.click()
+                        document.body.removeChild(a)
+                        URL.revokeObjectURL(url)
+                      } catch { alert('Download failed') }
+                    }}
+                  >↓</button>
                 </div>
               ))}
             </>
