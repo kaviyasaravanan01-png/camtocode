@@ -106,11 +106,12 @@ _TESS_CFGS  = [
 # ---------------------------------------------------------------------------
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "camtocode-prod-secret")
-CORS(app, origins=[FRONTEND_URL, "http://localhost:3000"])
+_cors_origins = [o for o in [FRONTEND_URL, "http://localhost:3000", "http://localhost:3001"] if o]
+CORS(app, origins="*")
 
 socketio = SocketIO(
     app,
-    cors_allowed_origins=[FRONTEND_URL, "http://localhost:3000"],
+    cors_allowed_origins="*",
     async_mode="threading",
     max_http_buffer_size=25 * 1024 * 1024,
     allow_upgrades=False,
@@ -285,20 +286,47 @@ def supabase_log_capture(user_id: str, filename: str, lang: str, blocks: int):
 # JWT verification
 # ---------------------------------------------------------------------------
 def verify_supabase_token(token: str) -> dict | None:
-    """Verify a Supabase JWT and return the payload, or None if invalid."""
+    """Verify a Supabase JWT. Tries HS256 first, then falls back to REST API
+    for ES256 tokens (new Supabase key format sb_publishable_*)."""
     if not token:
         return None
-    try:
-        import jwt as pyjwt
-        payload = pyjwt.decode(
-            token,
-            SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
-            audience="authenticated",
-        )
-        return payload
-    except Exception:
-        return None
+
+    # 1. Try legacy HS256 JWT secret
+    if SUPABASE_JWT_SECRET:
+        try:
+            import jwt as pyjwt
+            payload = pyjwt.decode(
+                token,
+                SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                audience="authenticated",
+            )
+            return payload
+        except Exception:
+            pass  # Fall through to REST API verification
+
+    # 2. Verify via Supabase REST API (handles ES256 tokens)
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        try:
+            resp = httpx.get(
+                f"{SUPABASE_URL}/auth/v1/user",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "apikey": SUPABASE_SERVICE_KEY,
+                },
+                timeout=5.0,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "sub":   data.get("id", ""),
+                    "email": data.get("email", ""),
+                    "aud":   "authenticated",
+                }
+        except Exception:
+            pass
+
+    return None
 
 # ---------------------------------------------------------------------------
 # Image quality helpers (unchanged from original)

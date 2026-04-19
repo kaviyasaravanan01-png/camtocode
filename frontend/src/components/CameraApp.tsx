@@ -53,46 +53,52 @@ interface SessionFixedData {
 export default function CameraApp({ userId, userEmail }: { userId: string; userEmail: string }) {
   const supabase = createClient()
 
-  // Socket
-  const socketRef  = useRef<Socket | null>(null)
-  const streamRef  = useRef<MediaStream | null>(null)
-  const videoRef   = useRef<HTMLVideoElement>(null)
-  const canvasRef  = useRef<HTMLCanvasElement>(null)
+  // Socket / media refs
+  const socketRef   = useRef<Socket | null>(null)
+  const streamRef   = useRef<MediaStream | null>(null)
+  const videoRef    = useRef<HTMLVideoElement>(null)
+  const canvasRef   = useRef<HTMLCanvasElement>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // UI state
-  const [capturing,     setCapturing]     = useState(false)
-  const [statusMsg,     setStatusMsg]     = useState('Ready')
-  const [outputText,    setOutputText]    = useState('')
-  const [qualityLabel,  setQualityLabel]  = useState('')
-  const [qualityScore,  setQualityScore]  = useState(0)
-  const [frames,        setFrames]        = useState(0)
-  const [lastLang,      setLastLang]      = useState('')
-  const [syntaxOk,      setSyntaxOk]      = useState<boolean | null>(null)
-  const [syntaxErr,     setSyntaxErr]     = useState('')
-  const [lastDownload,  setLastDownload]  = useState('')
+  const [capturing,    setCapturing]    = useState(false)
+  const [statusMsg,    setStatusMsg]    = useState('Ready')
+  const [outputText,   setOutputText]   = useState('')
+  const [qualityLabel, setQualityLabel] = useState('')
+  const [qualityScore, setQualityScore] = useState(0)
+  const [frames,       setFrames]       = useState(0)
+  const [lastLang,     setLastLang]     = useState('')
+  const [syntaxOk,     setSyntaxOk]     = useState<boolean | null>(null)
+  const [syntaxErr,    setSyntaxErr]    = useState('')
+  const [lastDownload, setLastDownload] = useState('')
+  const [glareWarn,    setGlareWarn]    = useState(false)
+  const [zoomMsg,      setZoomMsg]      = useState('')
+
+  // Video display
+  const [videoMode,  setVideoMode]  = useState<'camera' | 'screen'>('camera')
+  const [fitScreen,  setFitScreen]  = useState(false)
 
   // Settings
-  const [language,      setLanguage]      = useState('')
-  const [aiEnabled,     setAiEnabled]     = useState(true)
-  const [nightMode,     setNightMode]     = useState(false)
-  const [autoCapture,   setAutoCapture]   = useState(false)
-  const [autoClear,     setAutoClear]     = useState(false)
-  const [llmModel,      setLlmModel]      = useState('haiku')
-  const [bulkCapture,   setBulkCapture]   = useState(false)
-  const [bulkBlocks,    setBulkBlocks]    = useState(0)
-  const [bulkSession,   setBulkSession]   = useState(0)
+  const [language,    setLanguage]    = useState('')
+  const [aiEnabled,   setAiEnabled]   = useState(true)
+  const [nightMode,   setNightMode]   = useState(false)
+  const [autoCapture, setAutoCapture] = useState(false)
+  const [autoClear,   setAutoClear]   = useState(false)
+  const [llmModel,    setLlmModel]    = useState('haiku')
+  const [bulkCapture, setBulkCapture] = useState(false)
+  const [bulkBlocks,  setBulkBlocks]  = useState(0)
+  const [bulkSession, setBulkSession] = useState(0)
 
   // Export modal
-  const [showExport,    setShowExport]    = useState(false)
-  const [exportFilename,setExportFilename]= useState('')
-  const [exportModel,   setExportModel]   = useState('haiku')
-  const [exporting,     setExporting]     = useState(false)
+  const [showExport,     setShowExport]     = useState(false)
+  const [exportFilename, setExportFilename] = useState('')
+  const [exportModel,    setExportModel]    = useState('haiku')
+  const [exporting,      setExporting]      = useState(false)
 
   // Settings panel
-  const [showSettings,  setShowSettings]  = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
 
-  // ─── Init socket ─────────────────────────────────────────────────────────
+  // ─── Init socket ──────────────────────────────────────────────────────────
   useEffect(() => {
     const initSocket = async () => {
       const { data: { session } } = await supabase.auth.getSession()
@@ -103,6 +109,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         query: { token },
       })
       socketRef.current = sock
+
+      sock.on('connect', () => setStatusMsg('Connected — point at code and press Start'))
+      sock.on('connect_error', (e) => setStatusMsg('Connection error: ' + e.message))
 
       sock.on('init_state', (data: any) => {
         setAiEnabled(data.ai_enabled)
@@ -126,8 +135,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setQualityLabel(data.label)
         setQualityScore(data.score)
         setFrames(data.frames)
+        setGlareWarn(data.glare)
+        setZoomMsg(data.zoom_msg || '')
         if (data.text) {
-          setOutputText(prev => data.text!)
+          setOutputText(data.text)
           if (data.language) setLastLang(data.language)
         }
       })
@@ -140,17 +151,12 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         if (data.download_url) setLastDownload(data.download_url)
       })
 
-      sock.on('auto_captured', () => {
-        handleStop()
-      })
+      sock.on('auto_captured', () => handleStopRef.current?.())
 
       sock.on('session_fixed', (data: SessionFixedData) => {
         setExporting(false)
         setShowExport(false)
-        if (data.error) {
-          setStatusMsg('Export error: ' + data.error)
-          return
-        }
+        if (data.error) { setStatusMsg('Export error: ' + data.error); return }
         if (data.text) setOutputText(data.text)
         if (data.download_url) setLastDownload(data.download_url)
         setStatusMsg(`Session ${data.session} exported as ${data.filename}`)
@@ -162,184 +168,146 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     }
 
     initSocket()
-
-    return () => {
-      socketRef.current?.disconnect()
-      stopCamera()
-    }
+    return () => { socketRef.current?.disconnect(); stopStream() }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ─── Camera init ─────────────────────────────────────────────────────────
-  const initCamera = useCallback(async () => {
+  // ─── Camera init ──────────────────────────────────────────────────────────
+  const startCamera = useCallback(async () => {
+    stopStream()
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: false,
       })
       streamRef.current = stream
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        await videoRef.current.play()
-      }
+      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play() }
+      setVideoMode('camera')
       setStatusMsg('Camera ready — point at code and press Start')
     } catch (e: any) {
       setStatusMsg('Camera error: ' + e.message)
     }
   }, [])
 
-  useEffect(() => {
-    initCamera()
-  }, [initCamera])
+  // ─── Screen capture ───────────────────────────────────────────────────────
+  const startScreenCapture = useCallback(async () => {
+    stopStream()
+    try {
+      const stream = await (navigator.mediaDevices as any).getDisplayMedia({
+        video: { cursor: 'always' },
+        audio: false,
+      })
+      streamRef.current = stream
+      if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play() }
+      setVideoMode('screen')
+      setFitScreen(true)
+      setStatusMsg('Screen selected — press Start to capture')
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop())
-      streamRef.current = null
+      // Auto-revert to camera if user stops sharing
+      stream.getVideoTracks()[0].addEventListener('ended', () => {
+        setVideoMode('camera')
+        startCamera()
+      })
+    } catch (e: any) {
+      if (e.name !== 'NotAllowedError') setStatusMsg('Screen capture error: ' + e.message)
+      startCamera()
     }
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stopStream = () => {
+    streamRef.current?.getTracks().forEach(t => t.stop())
+    streamRef.current = null
   }
 
-  // ─── Capture helpers ─────────────────────────────────────────────────────
+  useEffect(() => { startCamera() }, [startCamera])
+
+  const stopCapturing = useCallback(() => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null }
+  }, [])
+
+  // ─── Capture helpers ──────────────────────────────────────────────────────
   const captureFrame = useCallback(() => {
-    const video  = videoRef.current
-    const canvas = canvasRef.current
+    const video = videoRef.current; const canvas = canvasRef.current
     if (!video || !canvas || !socketRef.current) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    canvas.width  = video.videoWidth
-    canvas.height = video.videoHeight
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight
     ctx.drawImage(video, 0, 0)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-    socketRef.current.emit('frame', { image: dataUrl })
+    socketRef.current.emit('frame', { image: canvas.toDataURL('image/jpeg', 0.85) })
   }, [])
 
   const handleStart = useCallback(() => {
     if (!socketRef.current) return
     socketRef.current.emit('start')
-    setCapturing(true)
-    setFrames(0)
-    setSyntaxOk(null)
-    setSyntaxErr('')
+    setCapturing(true); setFrames(0); setSyntaxOk(null); setSyntaxErr('')
     intervalRef.current = setInterval(captureFrame, 400)
   }, [captureFrame])
 
   const handleStop = useCallback(() => {
     if (!socketRef.current) return
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current)
-      intervalRef.current = null
-    }
+    stopCapturing()
     setCapturing(false)
     socketRef.current.emit('stop')
-  }, [])
+  }, [stopCapturing])
+
+  // Stable ref so auto_captured callback can call handleStop
+  const handleStopRef = useRef(handleStop)
+  useEffect(() => { handleStopRef.current = handleStop }, [handleStop])
 
   const handlePhoto = useCallback(() => {
-    const video  = videoRef.current
-    const canvas = canvasRef.current
+    const video = videoRef.current; const canvas = canvasRef.current
     if (!video || !canvas || !socketRef.current) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    canvas.width  = video.videoWidth
-    canvas.height = video.videoHeight
+    canvas.width = video.videoWidth; canvas.height = video.videoHeight
     ctx.drawImage(video, 0, 0)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.95)
-    socketRef.current.emit('photo', { image: dataUrl })
+    socketRef.current.emit('photo', { image: canvas.toDataURL('image/jpeg', 0.95) })
   }, [])
 
-  // ─── Settings emitters ───────────────────────────────────────────────────
+  // ─── Settings emitters ────────────────────────────────────────────────────
   const emit = (event: string, data?: object) => socketRef.current?.emit(event, data)
 
-  const handleLanguageChange = (lang: string) => {
-    setLanguage(lang)
-    emit('set_language', { language: lang })
-  }
+  const handleLanguageChange = (lang: string) => { setLanguage(lang); emit('set_language', { language: lang }) }
+  const handleAiToggle       = () => { const n = !aiEnabled;   setAiEnabled(n);   emit('set_ai',        { enabled: n }) }
+  const handleNightToggle    = () => { const n = !nightMode;   setNightMode(n);   emit('set_night',     { enabled: n }) }
+  const handleAutoToggle     = () => { const n = !autoCapture; setAutoCapture(n); emit('set_auto',      { enabled: n }) }
+  const handleAutoClearToggle= () => { const n = !autoClear;   setAutoClear(n);   emit('set_auto_clear',{ enabled: n }) }
+  const handleModelChange    = (model: string) => { setLlmModel(model); emit('set_model', { model }) }
+  const handleBulkToggle     = () => { const n = !bulkCapture; setBulkCapture(n); emit('set_bulk', { enabled: n }) }
+  const handleResetBulk      = () => { emit('reset_bulk_session'); setBulkBlocks(0) }
 
-  const handleAiToggle = () => {
-    const next = !aiEnabled
-    setAiEnabled(next)
-    emit('set_ai', { enabled: next })
-  }
-
-  const handleNightToggle = () => {
-    const next = !nightMode
-    setNightMode(next)
-    emit('set_night', { enabled: next })
-  }
-
-  const handleAutoToggle = () => {
-    const next = !autoCapture
-    setAutoCapture(next)
-    emit('set_auto', { enabled: next })
-  }
-
-  const handleAutoClearToggle = () => {
-    const next = !autoClear
-    setAutoClear(next)
-    emit('set_auto_clear', { enabled: next })
-  }
-
-  const handleModelChange = (model: string) => {
-    setLlmModel(model)
-    emit('set_model', { model })
-  }
-
-  const handleBulkToggle = () => {
-    const next = !bulkCapture
-    setBulkCapture(next)
-    emit('set_bulk', { enabled: next })
-  }
-
-  const handleResetBulk = () => {
-    emit('reset_bulk_session')
-    setBulkBlocks(0)
-  }
-
-  // ─── Copy ────────────────────────────────────────────────────────────────
+  // ─── Copy / Export ────────────────────────────────────────────────────────
   const handleCopy = () => {
     if (!outputText) return
     navigator.clipboard.writeText(outputText).then(() => setStatusMsg('Copied to clipboard!'))
   }
 
-  // ─── Export ──────────────────────────────────────────────────────────────
   const handleExportSubmit = () => {
     setExporting(true)
-    emit('fix_session_file', {
-      filename: exportFilename,
-      ai_fix:   true,
-      model:    exportModel,
-    })
+    emit('fix_session_file', { filename: exportFilename, ai_fix: true, model: exportModel })
   }
 
-  // ─── Sign out ────────────────────────────────────────────────────────────
-  const handleSignOut = async () => {
-    await supabase.auth.signOut()
-    window.location.href = '/'
-  }
+  // ─── Sign out ─────────────────────────────────────────────────────────────
+  const handleSignOut = async () => { await supabase.auth.signOut(); window.location.href = '/' }
 
-  // ─── Quality color ───────────────────────────────────────────────────────
+  // ─── Quality color ────────────────────────────────────────────────────────
   const qualityColor = qualityLabel === 'sharp' ? '#22c55e'
-    : qualityLabel === 'ok'    ? '#eab308'
-    : qualityLabel === 'blurry'? '#ef4444'
+    : qualityLabel === 'ok'     ? '#eab308'
+    : qualityLabel === 'blurry' ? '#ef4444'
     : '#888'
 
   return (
     <div style={s.root}>
-      {/* ── Header ─────────────────────────────────── */}
+      {/* ── Header ──────────────────────────────────── */}
       <div style={s.header}>
         <span style={s.logoText}>CamToCode</span>
         <div style={s.headerRight}>
           <a href="/history" style={s.historyLink}>History</a>
-          <button onClick={() => setShowSettings(!showSettings)} style={s.iconBtn}>
-            ⚙️
-          </button>
+          <button onClick={() => setShowSettings(!showSettings)} style={s.iconBtn} title="Settings">⚙️</button>
           <button onClick={handleSignOut} style={s.signOutBtn}>Sign Out</button>
         </div>
       </div>
 
-      {/* ── Settings Panel ────────────────────────── */}
+      {/* ── Settings Panel ──────────────────────────── */}
       {showSettings && (
         <div style={s.settingsPanel}>
           <div style={s.settingsRow}>
@@ -354,29 +322,29 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           <div style={s.settingsRow}>
             <span>Claude AI OCR</span>
             <label style={s.toggle}>
-              <input type="checkbox" checked={aiEnabled} onChange={handleAiToggle} />
-              <span style={s.toggleSlider} />
+              <input type="checkbox" checked={aiEnabled} onChange={handleAiToggle} style={s.toggleInput} />
+              <span style={{ ...s.toggleSlider, background: aiEnabled ? '#4f46e5' : '#374151' }} />
             </label>
           </div>
           <div style={s.settingsRow}>
             <span>Night Mode</span>
             <label style={s.toggle}>
-              <input type="checkbox" checked={nightMode} onChange={handleNightToggle} />
-              <span style={s.toggleSlider} />
+              <input type="checkbox" checked={nightMode} onChange={handleNightToggle} style={s.toggleInput} />
+              <span style={{ ...s.toggleSlider, background: nightMode ? '#4f46e5' : '#374151' }} />
             </label>
           </div>
           <div style={s.settingsRow}>
             <span>Auto Capture</span>
             <label style={s.toggle}>
-              <input type="checkbox" checked={autoCapture} onChange={handleAutoToggle} />
-              <span style={s.toggleSlider} />
+              <input type="checkbox" checked={autoCapture} onChange={handleAutoToggle} style={s.toggleInput} />
+              <span style={{ ...s.toggleSlider, background: autoCapture ? '#4f46e5' : '#374151' }} />
             </label>
           </div>
           <div style={s.settingsRow}>
             <span>Auto Clear After Export</span>
             <label style={s.toggle}>
-              <input type="checkbox" checked={autoClear} onChange={handleAutoClearToggle} />
-              <span style={s.toggleSlider} />
+              <input type="checkbox" checked={autoClear} onChange={handleAutoClearToggle} style={s.toggleInput} />
+              <span style={{ ...s.toggleSlider, background: autoClear ? '#4f46e5' : '#374151' }} />
             </label>
           </div>
           <div style={s.settingsRow}>
@@ -389,8 +357,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           <div style={s.settingsRow}>
             <span>Bulk Capture</span>
             <label style={s.toggle}>
-              <input type="checkbox" checked={bulkCapture} onChange={handleBulkToggle} />
-              <span style={s.toggleSlider} />
+              <input type="checkbox" checked={bulkCapture} onChange={handleBulkToggle} style={s.toggleInput} />
+              <span style={{ ...s.toggleSlider, background: bulkCapture ? '#4f46e5' : '#374151' }} />
             </label>
           </div>
           {bulkCapture && (
@@ -402,55 +370,94 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           {bulkCapture && (
             <div style={s.settingsRow}>
               <span>&nbsp;</span>
-              <button onClick={() => setShowExport(true)} style={s.exportBtn}>
-                Export Session
-              </button>
+              <button onClick={() => setShowExport(true)} style={s.exportBtn}>Export Session</button>
             </div>
           )}
         </div>
       )}
 
-      {/* ── Camera ────────────────────────────────── */}
+      {/* ── Camera / Screen toolbar ─────────────────── */}
+      <div style={s.videoToolbar}>
+        <div style={s.videoToolbarLeft}>
+          <button
+            onClick={videoMode === 'camera' ? startScreenCapture : startCamera}
+            style={s.toolbarBtn}
+            title={videoMode === 'camera' ? 'Switch to screen capture' : 'Switch to camera'}
+          >
+            {videoMode === 'camera' ? '🖥 Share Screen' : '📷 Use Camera'}
+          </button>
+          <button
+            onClick={() => setFitScreen(f => !f)}
+            style={{ ...s.toolbarBtn, background: fitScreen ? 'rgba(99,102,241,0.3)' : undefined }}
+            title="Toggle fit screen"
+          >
+            {fitScreen ? '⊡ Fit' : '⊞ Fill'}
+          </button>
+        </div>
+        {videoMode === 'screen' && (
+          <span style={s.videoModeTag}>🖥 Screen</span>
+        )}
+      </div>
+
+      {/* ── Video ───────────────────────────────────── */}
       <div style={s.cameraWrap}>
-        <video ref={videoRef} playsInline muted style={s.video} />
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          style={{ ...s.video, objectFit: fitScreen ? 'contain' : 'cover' }}
+        />
         <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+        {/* Quality badge */}
         {qualityLabel && (
           <div style={{ ...s.qualityBadge, borderColor: qualityColor, color: qualityColor }}>
             {qualityLabel.toUpperCase()} {qualityScore.toFixed(0)} | {frames} frames
           </div>
         )}
-      </div>
 
-      {/* ── Controls ──────────────────────────────── */}
-      <div style={s.controls}>
-        {!capturing ? (
-          <>
-            <button onClick={handleStart} style={s.startBtn}>Start</button>
-            <button onClick={handlePhoto} style={s.photoBtn}>📷 Photo</button>
-          </>
-        ) : (
-          <button onClick={handleStop} style={s.stopBtn}>Stop</button>
+        {/* Glare warning */}
+        {glareWarn && (
+          <div style={s.glareWarn}>⚠ Glare detected — adjust angle</div>
+        )}
+
+        {/* Zoom hint */}
+        {zoomMsg && (
+          <div style={s.zoomHint}>{zoomMsg}</div>
         )}
       </div>
 
-      {/* ── Status ────────────────────────────────── */}
+      {/* ── Controls ────────────────────────────────── */}
+      <div style={s.controls}>
+        {!capturing ? (
+          <>
+            <button onClick={handleStart} style={s.startBtn}>▶ Start</button>
+            <button onClick={handlePhoto} style={s.photoBtn}>📷 Photo</button>
+          </>
+        ) : (
+          <button onClick={handleStop} style={s.stopBtn}>⏹ Stop</button>
+        )}
+      </div>
+
+      {/* ── Status bar ──────────────────────────────── */}
       <div style={s.statusBar}>
-        {statusMsg}
+        <span style={{ flex: 1 }}>{statusMsg}</span>
         {lastLang && <span style={s.langTag}>{lastLang}</span>}
         {syntaxOk === false && <span style={s.syntaxError}>⚠ {syntaxErr}</span>}
         {syntaxOk === true  && <span style={s.syntaxOk}>✓ Syntax OK</span>}
       </div>
 
-      {/* ── Output ────────────────────────────────── */}
+      {/* ── Output ──────────────────────────────────── */}
       {outputText && (
         <div style={s.outputWrap}>
           <div style={s.outputHeader}>
-            <span>Output</span>
+            <span>Output {lastLang && `— ${lastLang}`}</span>
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={handleCopy} style={s.smallBtn}>Copy</button>
+              <button onClick={() => setOutputText('')} style={s.smallBtn}>Clear</button>
               {lastDownload && (
-                <a href={lastDownload} download style={s.downloadLink}>
-                  <button style={s.smallBtn}>Download</button>
+                <a href={lastDownload} download style={{ textDecoration: 'none' }}>
+                  <button style={s.smallBtn}>↓ Download</button>
                 </a>
               )}
             </div>
@@ -459,14 +466,12 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
       )}
 
-      {/* ── Export Modal ──────────────────────────── */}
+      {/* ── Export Modal ────────────────────────────── */}
       {showExport && (
         <div style={s.modalBackdrop} onClick={() => !exporting && setShowExport(false)}>
           <div style={s.modal} onClick={e => e.stopPropagation()}>
             <h3 style={{ marginBottom: '1rem' }}>Export Session</h3>
-            <p style={s.modalNote}>
-              Session {bulkSession} · {bulkBlocks} block{bulkBlocks !== 1 ? 's' : ''}
-            </p>
+            <p style={s.modalNote}>Session {bulkSession} · {bulkBlocks} block{bulkBlocks !== 1 ? 's' : ''}</p>
             <input
               type="text"
               placeholder="Filename (optional)"
@@ -482,9 +487,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               </select>
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: '1rem' }}>
-              <button onClick={() => setShowExport(false)} style={s.cancelBtn} disabled={exporting}>
-                Cancel
-              </button>
+              <button onClick={() => setShowExport(false)} style={s.cancelBtn} disabled={exporting}>Cancel</button>
               <button onClick={handleExportSubmit} style={s.exportBtn} disabled={exporting}>
                 {exporting ? 'Exporting...' : 'Export & Fix with Claude'}
               </button>
@@ -507,228 +510,148 @@ const s: Record<string, React.CSSProperties> = {
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   header: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     padding: '0.75rem 1rem',
     background: 'rgba(0,0,0,0.3)',
     borderBottom: '1px solid rgba(255,255,255,0.08)',
   },
   logoText: {
-    fontWeight: 800,
-    fontSize: '1.2rem',
+    fontWeight: 800, fontSize: '1.2rem',
     background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-    WebkitBackgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
+    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
   },
   headerRight: { display: 'flex', alignItems: 'center', gap: 10 },
-  historyLink: { color: '#818cf8', fontSize: '0.875rem' },
+  historyLink: { color: '#818cf8', fontSize: '0.875rem', textDecoration: 'none' },
   iconBtn: {
-    background: 'transparent',
-    border: 'none',
-    fontSize: '1.2rem',
-    padding: '0.3rem',
-    cursor: 'pointer',
-    borderRadius: '50%',
+    background: 'transparent', border: 'none',
+    fontSize: '1.2rem', padding: '0.3rem', cursor: 'pointer', borderRadius: '50%',
   },
   signOutBtn: {
-    background: 'rgba(239,68,68,0.2)',
-    color: '#fca5a5',
-    border: '1px solid rgba(239,68,68,0.3)',
-    borderRadius: 8,
-    padding: '0.35rem 0.75rem',
-    fontSize: '0.8rem',
+    background: 'rgba(239,68,68,0.2)', color: '#fca5a5',
+    border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8,
+    padding: '0.35rem 0.75rem', fontSize: '0.8rem', cursor: 'pointer',
   },
   settingsPanel: {
-    background: 'rgba(0,0,0,0.4)',
-    borderBottom: '1px solid rgba(255,255,255,0.08)',
-    padding: '0.75rem 1rem',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: 8,
+    background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid rgba(255,255,255,0.08)',
+    padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: 10,
   },
   settingsRow: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    fontSize: '0.875rem',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.875rem',
   },
   select: {
-    background: 'rgba(255,255,255,0.08)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 8,
-    color: '#e2e8f0',
-    padding: '0.3rem 0.5rem',
-    fontSize: '0.8rem',
+    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 8, color: '#e2e8f0', padding: '0.3rem 0.5rem', fontSize: '0.8rem',
   },
-  toggle: {
-    position: 'relative',
-    display: 'inline-block',
-    width: 44,
-    height: 24,
-    cursor: 'pointer',
+  toggle: { position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' },
+  toggleInput: { position: 'absolute', opacity: 0, width: 0, height: 0 },
+  toggleSlider: { position: 'absolute', inset: 0, borderRadius: 12, transition: '0.3s' },
+  videoToolbar: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '0.4rem 0.75rem',
+    background: 'rgba(0,0,0,0.25)',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
   },
-  toggleSlider: {
-    position: 'absolute',
-    inset: 0,
-    borderRadius: 12,
-    background: '#374151',
-    transition: '0.3s',
+  videoToolbarLeft: { display: 'flex', gap: 8 },
+  toolbarBtn: {
+    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)',
+    color: '#e2e8f0', borderRadius: 8, padding: '0.3rem 0.75rem',
+    fontSize: '0.78rem', cursor: 'pointer',
+  },
+  videoModeTag: {
+    background: 'rgba(99,102,241,0.25)', color: '#818cf8',
+    borderRadius: 6, padding: '2px 8px', fontSize: '0.75rem',
   },
   cameraWrap: {
-    position: 'relative',
-    flex: '1 0 auto',
-    maxHeight: '50vh',
-    background: '#000',
-    overflow: 'hidden',
+    position: 'relative', flex: '1 0 auto', maxHeight: '50vh',
+    background: '#000', overflow: 'hidden',
   },
-  video: {
-    width: '100%',
-    height: '100%',
-    objectFit: 'cover',
-  },
+  video: { width: '100%', height: '100%' },
   qualityBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    border: '1px solid',
-    borderRadius: 6,
-    padding: '2px 8px',
-    fontSize: '0.7rem',
-    background: 'rgba(0,0,0,0.6)',
-    fontFamily: 'monospace',
+    position: 'absolute', top: 8, right: 8,
+    border: '1px solid', borderRadius: 6, padding: '2px 8px',
+    fontSize: '0.7rem', background: 'rgba(0,0,0,0.6)', fontFamily: 'monospace',
+  },
+  glareWarn: {
+    position: 'absolute', bottom: 8, left: 8,
+    background: 'rgba(234,179,8,0.85)', color: '#000',
+    borderRadius: 6, padding: '3px 10px', fontSize: '0.75rem', fontWeight: 600,
+  },
+  zoomHint: {
+    position: 'absolute', bottom: 8, right: 8,
+    background: 'rgba(0,0,0,0.7)', color: '#fbbf24',
+    borderRadius: 6, padding: '3px 10px', fontSize: '0.75rem',
   },
   controls: {
-    display: 'flex',
-    gap: 12,
-    padding: '0.75rem 1rem',
-    justifyContent: 'center',
+    display: 'flex', gap: 12, padding: '0.75rem 1rem', justifyContent: 'center',
   },
   startBtn: {
     background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-    color: '#fff',
-    padding: '0.75rem 2.5rem',
-    fontSize: '1rem',
-    fontWeight: 700,
-    borderRadius: 50,
-    minWidth: 120,
+    color: '#fff', padding: '0.75rem 2.5rem', fontSize: '1rem',
+    fontWeight: 700, borderRadius: 50, minWidth: 140, cursor: 'pointer', border: 'none',
   },
   stopBtn: {
     background: 'linear-gradient(135deg, #ef4444, #dc2626)',
-    color: '#fff',
-    padding: '0.75rem 2.5rem',
-    fontSize: '1rem',
-    fontWeight: 700,
-    borderRadius: 50,
-    minWidth: 120,
+    color: '#fff', padding: '0.75rem 2.5rem', fontSize: '1rem',
+    fontWeight: 700, borderRadius: 50, minWidth: 140, cursor: 'pointer', border: 'none',
   },
   photoBtn: {
-    background: 'rgba(255,255,255,0.08)',
-    color: '#e2e8f0',
-    border: '1px solid rgba(255,255,255,0.15)',
-    borderRadius: 50,
-    padding: '0.75rem 1.5rem',
-    fontWeight: 600,
+    background: 'rgba(255,255,255,0.08)', color: '#e2e8f0',
+    border: '1px solid rgba(255,255,255,0.15)', borderRadius: 50,
+    padding: '0.75rem 1.5rem', fontWeight: 600, cursor: 'pointer',
   },
   statusBar: {
-    padding: '0.5rem 1rem',
-    fontSize: '0.8rem',
-    color: 'rgba(255,255,255,0.6)',
-    background: 'rgba(0,0,0,0.3)',
-    display: 'flex',
-    gap: 8,
-    alignItems: 'center',
-    flexWrap: 'wrap',
+    padding: '0.5rem 1rem', fontSize: '0.8rem', color: 'rgba(255,255,255,0.6)',
+    background: 'rgba(0,0,0,0.3)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap',
   },
   langTag: {
-    background: 'rgba(99,102,241,0.25)',
-    color: '#818cf8',
-    borderRadius: 4,
-    padding: '1px 6px',
-    fontSize: '0.75rem',
+    background: 'rgba(99,102,241,0.25)', color: '#818cf8',
+    borderRadius: 4, padding: '1px 6px', fontSize: '0.75rem',
   },
   syntaxError: { color: '#fca5a5', fontSize: '0.75rem' },
   syntaxOk:    { color: '#86efac', fontSize: '0.75rem' },
   outputWrap: {
     margin: '0.75rem 1rem',
-    background: 'rgba(0,0,0,0.4)',
-    borderRadius: 12,
-    border: '1px solid rgba(255,255,255,0.08)',
-    overflow: 'hidden',
+    background: 'rgba(0,0,0,0.4)', borderRadius: 12,
+    border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden',
   },
   outputHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '0.5rem 0.75rem',
-    borderBottom: '1px solid rgba(255,255,255,0.06)',
-    fontSize: '0.8rem',
-    color: 'rgba(255,255,255,0.5)',
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '0.5rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.06)',
+    fontSize: '0.8rem', color: 'rgba(255,255,255,0.5)',
   },
   output: {
-    padding: '0.75rem',
-    fontSize: '0.8rem',
+    padding: '0.75rem', fontSize: '0.8rem',
     fontFamily: '"JetBrains Mono", "Fira Code", Consolas, monospace',
-    whiteSpace: 'pre-wrap',
-    wordBreak: 'break-all',
-    maxHeight: 300,
-    overflowY: 'auto',
-    color: '#e2e8f0',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+    maxHeight: 300, overflowY: 'auto', color: '#e2e8f0', margin: 0,
   },
   smallBtn: {
-    background: 'rgba(255,255,255,0.08)',
-    border: '1px solid rgba(255,255,255,0.12)',
-    color: '#e2e8f0',
-    borderRadius: 8,
-    padding: '0.25rem 0.75rem',
-    fontSize: '0.8rem',
+    background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)',
+    color: '#e2e8f0', borderRadius: 8, padding: '0.25rem 0.75rem',
+    fontSize: '0.8rem', cursor: 'pointer',
   },
   exportBtn: {
     background: 'linear-gradient(135deg, #4f46e5, #7c3aed)',
-    color: '#fff',
-    borderRadius: 8,
-    padding: '0.35rem 0.9rem',
-    fontSize: '0.8rem',
-    fontWeight: 600,
+    color: '#fff', borderRadius: 8, padding: '0.35rem 0.9rem',
+    fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', border: 'none',
   },
   cancelBtn: {
-    background: 'rgba(255,255,255,0.06)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    color: '#e2e8f0',
-    borderRadius: 8,
-    padding: '0.35rem 0.9rem',
-    fontSize: '0.8rem',
+    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)',
+    color: '#e2e8f0', borderRadius: 8, padding: '0.35rem 0.9rem',
+    fontSize: '0.8rem', cursor: 'pointer',
   },
-  downloadLink: { textDecoration: 'none' },
   input: {
-    background: 'rgba(255,255,255,0.07)',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 10,
-    color: '#fff',
-    padding: '0.6rem 0.75rem',
-    fontSize: '0.875rem',
+    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 10, color: '#fff', padding: '0.6rem 0.75rem', fontSize: '0.875rem',
+    boxSizing: 'border-box',
   },
   modalBackdrop: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.7)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-    padding: '1rem',
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem',
   },
   modal: {
-    background: '#1e1e3a',
-    border: '1px solid rgba(255,255,255,0.1)',
-    borderRadius: 16,
-    padding: '1.5rem',
-    width: '100%',
-    maxWidth: 400,
+    background: '#1e1e3a', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 16, padding: '1.5rem', width: '100%', maxWidth: 400,
   },
-  modalNote: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: '0.8rem',
-    marginBottom: '1rem',
-  },
+  modalNote: { color: 'rgba(255,255,255,0.5)', fontSize: '0.8rem', marginBottom: '1rem' },
 }
