@@ -17,6 +17,8 @@ import subprocess
 import threading
 import queue
 import json
+import time as _time
+from collections import deque
 from io import BytesIO
 from collections import Counter
 from difflib import SequenceMatcher
@@ -39,6 +41,83 @@ SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")   # service_ro
 SUPABASE_JWT_SECRET  = os.environ.get("SUPABASE_JWT_SECRET", "")    # JWT secret from dashboard
 FRONTEND_URL         = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 PORT                 = int(os.environ.get("PORT", 5000))
+
+# ---------------------------------------------------------------------------
+# Subscription plans & admin config
+# ---------------------------------------------------------------------------
+ADMIN_EMAILS: set[str] = {
+    "anandanathurelangovan94@gmail.com",
+    "kaviyasaravanan01@gmail.com",
+}
+
+SCAN_COOLDOWN_SECS   = 3      # minimum seconds between any two scans
+SCAN_RATE_PER_MINUTE = 8      # rolling-window cap
+
+# Vision OCR always uses Haiku (cost control — never Sonnet for image calls)
+VISION_OCR_MODEL = "claude-haiku-4-5-20251001"
+
+PLANS: dict[str, dict] = {
+    # ── Free ──────────────────────────────────────────────────────────────
+    "free": {
+        "scans_day":        20,
+        "ai_scans_day":      3,   # Vision OCR scans per day
+        "scans_month":     200,
+        "ai_fixes_month":    0,   # full-file AI fix disabled
+        "max_lines_scan":  100,   # truncate before Claude per scan
+        "max_lines_fix":     0,
+        "fix_token_cap":     0,
+        "fix_token_budget":  0,
+        "sonnet_allowed":  False,
+        "sonnet_budget":     0,
+        "save_allowed":    True,
+        "max_files":        10,
+    },
+    # ── Starter (₹599/month) ─────────────────────────────────────────────
+    "starter": {
+        "scans_day":       200,
+        "ai_scans_day":    200,
+        "scans_month":    6000,
+        "ai_fixes_month":   15,
+        "max_lines_scan":  300,
+        "max_lines_fix":   300,
+        "fix_token_cap":  8_000,
+        "fix_token_budget": 120_000,   # 15 × 8 000
+        "sonnet_allowed":  False,
+        "sonnet_budget":     0,
+        "save_allowed":    True,
+        "max_files":       500,
+    },
+    # ── Pro (₹1499/month) ────────────────────────────────────────────────
+    "pro": {
+        "scans_day":        500,
+        "ai_scans_day":     500,
+        "scans_month":   15_000,
+        "ai_fixes_month":    75,
+        "max_lines_scan":  1000,
+        "max_lines_fix":   1000,
+        "fix_token_cap":  12_000,
+        "fix_token_budget": 900_000,   # 75 × 12 000
+        "sonnet_allowed":   True,
+        "sonnet_budget":  500_000,     # hard monthly Sonnet token cap
+        "save_allowed":    True,
+        "max_files":      1000,
+    },
+    # ── Admin (unlimited) ────────────────────────────────────────────────
+    "admin": {
+        "scans_day":     999_999,
+        "ai_scans_day":  999_999,
+        "scans_month":   999_999,
+        "ai_fixes_month":999_999,
+        "max_lines_scan":999_999,
+        "max_lines_fix": 999_999,
+        "fix_token_cap": 999_999,
+        "fix_token_budget": 999_999_999,
+        "sonnet_allowed":  True,
+        "sonnet_budget": 999_999_999,
+        "save_allowed":    True,
+        "max_files":     999_999,
+    },
+}
 
 # Tesseract: on Railway it's installed system-wide via Dockerfile/nixpacks
 # On Windows dev machine override with env var TESSERACT_CMD
@@ -83,7 +162,7 @@ LLM_MODELS = {
     "haiku":  "claude-haiku-4-5-20251001",
     "sonnet": "claude-sonnet-4-6",
 }
-VISION_MODEL = "claude-sonnet-4-6"
+VISION_MODEL = VISION_OCR_MODEL   # Always Haiku for Vision (cost control)
 
 _EXT_MAP: dict[str, str] = {
     "python":     ".py",   "javascript": ".js",   "typescript": ".ts",
@@ -123,7 +202,7 @@ socketio = SocketIO(
 class UserSession:
     def __init__(self, sid: str):
         self.sid                   = sid
-        self.user_id               = ""         # Supabase user UUID
+        self.user_id               = ""
         self.user_email            = ""
         self.capturing             = False
         self.last_saved            = ""
@@ -139,8 +218,23 @@ class UserSession:
         self.bulk_session_blocks   = 0
         self.bulk_session_number   = 0
         self.consec_sharp          = 0
-        self.current_session_path  = ""         # Supabase Storage path for live buffer
+        self.current_session_path  = ""
         self._lock                 = threading.Lock()
+        # ── Subscription plan ───────────────────────────────────────────
+        self.plan                       = "free"
+        self.plan_limits: dict          = PLANS["free"]
+        # ── Usage counters (cached from DB) ─────────────────────────────
+        self.usage_today_scans          = 0
+        self.usage_today_ai_scans       = 0
+        self.usage_month_scans          = 0
+        self.usage_month_haiku_fix_tok  = 0
+        self.usage_month_sonnet_fix_tok = 0
+        self.usage_month_ai_fixes       = 0
+        self.usage_files_saved          = 0
+        self.usage_loaded_at            = 0.0   # epoch when cache was last refreshed
+        # ── Rate limiting (in-memory, per session) ───────────────────────
+        self.last_scan_completed_at     = 0.0
+        self.scan_timestamps: list[float] = []  # rolling 60-second window
 
     def active_model(self) -> str:
         return LLM_MODELS.get(self.llm_model_key, LLM_MODELS["haiku"])
@@ -317,6 +411,290 @@ def supabase_log_capture(user_id: str, filename: str, lang: str, blocks: int):
         )
     except Exception:
         pass
+
+# ---------------------------------------------------------------------------
+# Usage / plan DB helpers (PostgREST + RPC)
+# ---------------------------------------------------------------------------
+def _rest_hdr() -> dict:
+    return {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey":        SUPABASE_SERVICE_KEY,
+        "Content-Type":  "application/json",
+    }
+
+def db_get_plan(user_id: str) -> str:
+    """Return the user's plan string ('free','starter','pro','admin')."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return "free"
+    try:
+        resp = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/user_plans?user_id=eq.{user_id}&select=plan",
+            headers=_rest_hdr(), timeout=5,
+        )
+        if resp.status_code == 200:
+            rows = resp.json()
+            if rows:
+                return rows[0].get("plan", "free")
+    except Exception:
+        pass
+    return "free"
+
+def db_upsert_plan(user_id: str, plan: str) -> None:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return
+    try:
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/user_plans",
+            json={"user_id": user_id, "plan": plan},
+            headers={**_rest_hdr(), "Prefer": "resolution=merge-duplicates"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+def db_get_daily(user_id: str, date_str: str) -> dict:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {}
+    try:
+        resp = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/daily_usage?user_id=eq.{user_id}&date=eq.{date_str}&select=*",
+            headers=_rest_hdr(), timeout=5,
+        )
+        if resp.status_code == 200:
+            rows = resp.json()
+            if rows:
+                return rows[0]
+    except Exception:
+        pass
+    return {}
+
+def db_get_monthly(user_id: str, month_str: str) -> dict:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return {}
+    try:
+        resp = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/monthly_usage?user_id=eq.{user_id}&month=eq.{month_str}&select=*",
+            headers=_rest_hdr(), timeout=5,
+        )
+        if resp.status_code == 200:
+            rows = resp.json()
+            if rows:
+                return rows[0]
+    except Exception:
+        pass
+    return {}
+
+def db_inc_daily(user_id: str, scans: int = 0, ai_scans: int = 0) -> None:
+    """Atomically increment daily_usage via SQL RPC."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
+        return
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/increment_daily_usage",
+            json={"p_user_id": user_id, "p_date": date_str,
+                  "p_scans": scans, "p_ai_scans": ai_scans},
+            headers=_rest_hdr(), timeout=5,
+        )
+    except Exception:
+        pass
+
+def db_inc_monthly(
+    user_id: str,
+    scans: int = 0,
+    haiku_fix_tokens: int = 0,
+    sonnet_fix_tokens: int = 0,
+    ai_fixes: int = 0,
+    files_saved: int = 0,
+) -> None:
+    """Atomically increment monthly_usage via SQL RPC."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
+        return
+    month_str = datetime.now().strftime("%Y-%m")
+    try:
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/increment_monthly_usage",
+            json={
+                "p_user_id": user_id, "p_month": month_str,
+                "p_scans": scans,
+                "p_haiku_fix_tokens": haiku_fix_tokens,
+                "p_sonnet_fix_tokens": sonnet_fix_tokens,
+                "p_ai_fixes": ai_fixes,
+                "p_files_saved": files_saved,
+            },
+            headers=_rest_hdr(), timeout=5,
+        )
+    except Exception:
+        pass
+
+def db_get_file_count(user_id: str) -> int:
+    """Count exported files for this user this month."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return 0
+    month_str = datetime.now().strftime("%Y-%m")
+    row = db_get_monthly(user_id, month_str)
+    return row.get("files_saved", 0)
+
+def load_user_plan_usage(sess: "UserSession") -> None:
+    """Load plan and usage counters into the session object from DB."""
+    if not sess.user_id:
+        return
+    # Admin by email always overrides DB plan
+    if sess.user_email in ADMIN_EMAILS:
+        sess.plan = "admin"
+        db_upsert_plan(sess.user_id, "admin")
+    else:
+        sess.plan = db_get_plan(sess.user_id)
+    sess.plan_limits = PLANS.get(sess.plan, PLANS["free"])
+
+    today    = datetime.now().strftime("%Y-%m-%d")
+    month    = datetime.now().strftime("%Y-%m")
+    daily    = db_get_daily(sess.user_id, today)
+    monthly  = db_get_monthly(sess.user_id, month)
+
+    sess.usage_today_scans          = daily.get("scans",            0)
+    sess.usage_today_ai_scans       = daily.get("ai_scans",         0)
+    sess.usage_month_scans          = monthly.get("scans",           0)
+    sess.usage_month_haiku_fix_tok  = monthly.get("haiku_fix_tokens",0)
+    sess.usage_month_sonnet_fix_tok = monthly.get("sonnet_fix_tokens",0)
+    sess.usage_month_ai_fixes       = monthly.get("ai_fixes",        0)
+    sess.usage_files_saved          = monthly.get("files_saved",     0)
+    sess.usage_loaded_at            = _time.time()
+    print(f"[plan] user={sess.user_email} plan={sess.plan} "
+          f"scans_today={sess.usage_today_scans} ai_scans={sess.usage_today_ai_scans} "
+          f"fixes_month={sess.usage_month_ai_fixes}", flush=True)
+
+# ---------------------------------------------------------------------------
+# Limit checks
+# ---------------------------------------------------------------------------
+def _is_admin(sess: "UserSession") -> bool:
+    return sess.plan == "admin" or sess.user_email in ADMIN_EMAILS
+
+def check_rate_limits(sess: "UserSession") -> tuple[bool, str]:
+    """Check 3s cooldown and 8/min rolling window. Returns (ok, msg)."""
+    if _is_admin(sess):
+        return True, ""
+    now = _time.time()
+    elapsed = now - sess.last_scan_completed_at
+    if elapsed < SCAN_COOLDOWN_SECS:
+        wait = round(SCAN_COOLDOWN_SECS - elapsed, 1)
+        return False, f"Please wait {wait}s before next scan"
+    cutoff = now - 60
+    sess.scan_timestamps = [t for t in sess.scan_timestamps if t > cutoff]
+    if len(sess.scan_timestamps) >= SCAN_RATE_PER_MINUTE:
+        return False, f"Rate limit: max {SCAN_RATE_PER_MINUTE} scans per minute"
+    return True, ""
+
+def check_scan_limits(sess: "UserSession", is_ai: bool) -> tuple[bool, str]:
+    """Check daily + monthly scan limits. Returns (ok, msg)."""
+    if _is_admin(sess):
+        return True, ""
+    lim = sess.plan_limits
+    name = sess.plan.capitalize()
+    if sess.usage_today_scans >= lim["scans_day"]:
+        return False, f"Daily scan limit reached ({lim['scans_day']}/day on {name} plan). Resets at midnight."
+    if is_ai and sess.usage_today_ai_scans >= lim["ai_scans_day"]:
+        return False, f"Daily AI scan limit reached on {name} plan. Disable AI to keep scanning with Tesseract."
+    if sess.usage_month_scans >= lim["scans_month"]:
+        return False, f"Monthly scan limit reached ({lim['scans_month']}/month on {name} plan). Resets next month."
+    return True, ""
+
+def check_ai_fix_limits(sess: "UserSession", line_count: int) -> tuple[bool, str, bool]:
+    """Check if AI fix is allowed and decide Haiku vs Sonnet.
+    Returns (allowed, error_msg, use_sonnet)."""
+    if _is_admin(sess):
+        return True, "", line_count >= 300  # admin always gets Sonnet for big files
+
+    lim  = sess.plan_limits
+    name = sess.plan.capitalize()
+
+    if not lim.get("ai_fixes_month", 0):
+        return False, f"AI Fix is not available on the {name} plan. Upgrade to Starter or Pro.", False
+
+    if sess.usage_month_ai_fixes >= lim["ai_fixes_month"]:
+        return False, f"Monthly AI fix limit reached ({lim['ai_fixes_month']}/month on {name}). Resets next month.", False
+
+    total_fix_tokens = sess.usage_month_haiku_fix_tok + sess.usage_month_sonnet_fix_tok
+    if total_fix_tokens >= lim.get("fix_token_budget", 0):
+        return False, f"Monthly AI fix token budget exhausted on {name} plan.", False
+
+    # Decide model
+    use_sonnet = False
+    if lim.get("sonnet_allowed", False) and line_count >= 300:
+        sonnet_used = sess.usage_month_sonnet_fix_tok
+        sonnet_cap  = lim.get("sonnet_budget", 0)
+        if sonnet_used < sonnet_cap:
+            use_sonnet = True
+        # else: Sonnet budget exhausted → silently fall back to Haiku
+
+    return True, "", use_sonnet
+
+def check_file_save_limit(sess: "UserSession") -> tuple[bool, str]:
+    """Check if user can save another file."""
+    if _is_admin(sess):
+        return True, ""
+    lim = sess.plan_limits
+    max_f = lim.get("max_files", 0)
+    if max_f and sess.usage_files_saved >= max_f:
+        name = sess.plan.capitalize()
+        return False, f"File storage limit reached ({max_f} files on {name} plan). Delete old files or upgrade."
+    return True, ""
+
+def record_scan(sess: "UserSession", is_ai: bool) -> None:
+    """Record a completed scan: update session cache + DB."""
+    now = _time.time()
+    sess.last_scan_completed_at = now
+    sess.scan_timestamps.append(now)
+    sess.usage_today_scans    += 1
+    sess.usage_month_scans    += 1
+    if is_ai:
+        sess.usage_today_ai_scans += 1
+    if sess.user_id:
+        db_inc_daily(sess.user_id, scans=1, ai_scans=(1 if is_ai else 0))
+        db_inc_monthly(sess.user_id, scans=1)
+
+def record_ai_fix(sess: "UserSession", haiku_tokens: int, sonnet_tokens: int) -> None:
+    """Record an AI fix operation: update session cache + DB."""
+    sess.usage_month_ai_fixes       += 1
+    sess.usage_month_haiku_fix_tok  += haiku_tokens
+    sess.usage_month_sonnet_fix_tok += sonnet_tokens
+    if sess.user_id:
+        db_inc_monthly(
+            sess.user_id,
+            haiku_fix_tokens=haiku_tokens,
+            sonnet_fix_tokens=sonnet_tokens,
+            ai_fixes=1,
+        )
+
+def record_file_saved(sess: "UserSession") -> None:
+    """Record a file save: update session cache + DB."""
+    sess.usage_files_saved += 1
+    if sess.user_id:
+        db_inc_monthly(sess.user_id, files_saved=1)
+
+def plan_usage_payload(sess: "UserSession") -> dict:
+    """Serialisable snapshot of plan + usage for the frontend."""
+    lim = sess.plan_limits
+    return {
+        "plan":              sess.plan,
+        "scans_today":       sess.usage_today_scans,
+        "ai_scans_today":    sess.usage_today_ai_scans,
+        "scans_day_limit":   lim.get("scans_day", 0),
+        "ai_scans_day_limit":lim.get("ai_scans_day", 0),
+        "scans_month":       sess.usage_month_scans,
+        "scans_month_limit": lim.get("scans_month", 0),
+        "ai_fixes_month":    sess.usage_month_ai_fixes,
+        "ai_fixes_limit":    lim.get("ai_fixes_month", 0),
+        "haiku_fix_tokens":  sess.usage_month_haiku_fix_tok,
+        "sonnet_fix_tokens": sess.usage_month_sonnet_fix_tok,
+        "fix_token_budget":  lim.get("fix_token_budget", 0),
+        "files_saved":       sess.usage_files_saved,
+        "max_files":         lim.get("max_files", 0),
+        "sonnet_allowed":    lim.get("sonnet_allowed", False),
+        "max_lines_scan":    lim.get("max_lines_scan", 0),
+        "save_allowed":      lim.get("save_allowed", True),
+        "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
+    }
 
 # ---------------------------------------------------------------------------
 # JWT verification
@@ -1036,7 +1414,8 @@ def llm_repair_syntax_generic(text: str, error_msg: str, language: str,
 
 
 def llm_fix_full_file(content: str, lang: str, model_key: str | None = None,
-                      session: UserSession | None = None) -> str:
+                      session: UserSession | None = None,
+                      token_tracker: dict | None = None) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not (HAS_ANTHROPIC and api_key):
         return content
@@ -1063,6 +1442,10 @@ def llm_fix_full_file(content: str, lang: str, model_key: str | None = None,
             model=_model, max_tokens=8192,
             messages=[{"role": "user", "content": prompt}],
         )
+        if token_tracker is not None:
+            token_tracker["input"]  = getattr(resp.usage, "input_tokens",  0)
+            token_tracker["output"] = getattr(resp.usage, "output_tokens", 0)
+            token_tracker["model"]  = _model
         result = resp.content[0].text.strip()
         if result.startswith("```"):
             result = "\n".join(
@@ -1089,7 +1472,8 @@ def _encode_for_vision(img_np: np.ndarray, max_side: int = 2048) -> tuple[str, s
 
 
 def _vision_ocr(b64_data: str, media_type: str = "image/png",
-                language_hint: str = "") -> str | None:
+                language_hint: str = "",
+                token_tracker: dict | None = None) -> str | None:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not (HAS_ANTHROPIC and api_key):
         return None
@@ -1120,6 +1504,10 @@ def _vision_ocr(b64_data: str, media_type: str = "image/png",
                 {"type": "text", "text": prompt},
             ]}],
         )
+        if token_tracker is not None:
+            token_tracker["input"]  = getattr(resp.usage, "input_tokens",  0)
+            token_tracker["output"] = getattr(resp.usage, "output_tokens", 0)
+            token_tracker["model"]  = VISION_MODEL
         result = resp.content[0].text.strip()
         if result.startswith("```"):
             result = "\n".join(l for l in result.splitlines()
@@ -1184,6 +1572,7 @@ def on_connect():
             sess.user_id    = payload.get("sub", "")
             sess.user_email = payload.get("email", "")
             print(f"[connect] user={sess.user_email} sid={sid}", flush=True)
+            load_user_plan_usage(sess)
 
     emit("init_state", {
         "ai_enabled":              sess.ai_enabled,
@@ -1197,6 +1586,7 @@ def on_connect():
         "bulk_session_number":     sess.bulk_session_number,
         "user_id":                 sess.user_id,
         "user_email":              sess.user_email,
+        "plan_usage":              plan_usage_payload(sess),
     })
 
 
@@ -1217,7 +1607,9 @@ def on_auth(data):
     if payload:
         sess.user_id    = payload.get("sub", "")
         sess.user_email = payload.get("email", "")
-        emit("auth_ok", {"user_id": sess.user_id, "user_email": sess.user_email})
+        load_user_plan_usage(sess)
+        emit("auth_ok", {"user_id": sess.user_id, "user_email": sess.user_email,
+                         "plan_usage": plan_usage_payload(sess)})
     else:
         emit("auth_error", {"error": "Invalid token"})
 
@@ -1259,20 +1651,30 @@ def on_stop():
         emit("status", {"capturing": False, "msg": "Stopped - no sharp frames captured"})
         return
 
+    # ── Subscription rate + scan limit checks ────────────────────────────
+    is_ai_scan = sess.ai_enabled and bool(os.environ.get("ANTHROPIC_API_KEY"))
+    rate_ok, rate_msg = check_rate_limits(sess)
+    if not rate_ok:
+        emit("status", {"capturing": False, "msg": rate_msg})
+        return
+    scan_ok, scan_msg = check_scan_limits(sess, is_ai=is_ai_scan)
+    if not scan_ok:
+        emit("status", {"capturing": False, "msg": scan_msg,
+                        "limit_hit": True, "plan_usage": plan_usage_payload(sess)})
+        return
+
     if len(rgb_buf) < MIN_FRAMES_CONSENSUS:
         emit("status", {"capturing": True, "msg": f"Only {len(rgb_buf)} frame(s) — processing anyway..."})
 
     results_with_conf: list[tuple[str, float]] = []
     best_line_confs: list[float] = []
-    ai_used      = False
-    text         = ""
-    vision_tried = False
-    api_key      = os.environ.get("ANTHROPIC_API_KEY", "")
+    ai_used  = False
+    text     = ""
+    api_key  = os.environ.get("ANTHROPIC_API_KEY", "")
 
-    # Primary: Claude Vision
+    # Primary: Claude Vision (ALWAYS Haiku — enforced by VISION_OCR_MODEL)
     if sess.ai_enabled and HAS_ANTHROPIC and api_key:
-        vision_tried = True
-        emit("status", {"capturing": True, "msg": "Reading code with Claude Vision..."})
+        emit("status", {"capturing": True, "msg": "Reading code with Claude Vision (Haiku)..."})
         try:
             best_img        = _best_frame(rgb_buf)
             b64, media_type = _encode_for_vision(best_img)
@@ -1331,9 +1733,17 @@ def on_stop():
         emit("status", {"capturing": False, "msg": "OCR returned empty — enable AI or move closer"})
         return
 
+    # ── Enforce plan line cap before any LLM call ────────────────────────
+    max_lines = sess.plan_limits.get("max_lines_scan", 99999)
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        text = "\n".join(lines[:max_lines])
+        emit("status", {"capturing": True,
+                        "msg": f"Truncated to {max_lines} lines (plan limit). Upgrade for more."})
+
     lang = sess.language_hint if sess.language_hint else detect_language(text)
 
-    # Syntax-guided repair
+    # Syntax-guided repair (Haiku only — no additional plan check needed)
     if not ai_used and sess.ai_enabled and HAS_ANTHROPIC and api_key and lang == "python":
         try:
             ok, err = check_python_syntax(text)
@@ -1397,12 +1807,14 @@ def on_stop():
     if sess.user_id and SUPABASE_URL:
         supabase_append_text(_sb_storage_path(sess.user_id), text + "\n\n")
     else:
-        # Fallback: local file for dev/testing
         try:
             with open(f"output_{sid}.txt", "a", encoding="utf-8") as f:
                 f.write(text + "\n\n")
         except Exception:
             pass
+
+    # ── Record usage ─────────────────────────────────────────────────────
+    record_scan(sess, is_ai=is_ai_scan and ai_used)
 
     _bulk_block_num = None
     if sess.bulk_capture:
@@ -1412,6 +1824,7 @@ def on_stop():
     emit("result", {
         "text": text, "lang": lang, "ai_used": ai_used,
         "syntax_ok": syntax_ok, "syntax_err": syntax_err,
+        "plan_usage": plan_usage_payload(sess),
     })
     _status_data: dict = {
         "capturing": False,
@@ -1437,15 +1850,27 @@ def on_photo(data):
         emit("status", {"capturing": False, "msg": f"Photo decode error: {e}"})
         return
 
+    # ── Subscription rate + scan limit checks ────────────────────────────
+    api_key    = os.environ.get("ANTHROPIC_API_KEY", "")
+    is_ai_scan = sess.ai_enabled and HAS_ANTHROPIC and bool(api_key)
+    rate_ok, rate_msg = check_rate_limits(sess)
+    if not rate_ok:
+        emit("status", {"capturing": False, "msg": rate_msg})
+        return
+    scan_ok, scan_msg = check_scan_limits(sess, is_ai=is_ai_scan)
+    if not scan_ok:
+        emit("status", {"capturing": False, "msg": scan_msg,
+                        "limit_hit": True, "plan_usage": plan_usage_payload(sess)})
+        return
+
     ai_used = False
     text    = ""
     lc      = []
     heatmap = []
     conf    = 0.0
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
     if sess.ai_enabled and HAS_ANTHROPIC and api_key:
-        emit("status", {"capturing": True, "msg": "Reading code with Claude Vision..."})
+        emit("status", {"capturing": True, "msg": "Reading code with Claude Vision (Haiku)..."})
         try:
             b64_data, media_type = _encode_for_vision(img_np)
             vision_text = _vision_ocr(b64_data, media_type, sess.language_hint)
@@ -1469,6 +1894,14 @@ def on_photo(data):
     if not text:
         emit("status", {"capturing": False, "msg": "OCR returned empty — try larger font or better focus"})
         return
+
+    # ── Enforce plan line cap ─────────────────────────────────────────────
+    max_lines = sess.plan_limits.get("max_lines_scan", 99999)
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        text = "\n".join(lines[:max_lines])
+        emit("status", {"capturing": True,
+                        "msg": f"Truncated to {max_lines} lines (plan limit). Upgrade for more."})
 
     lang = sess.language_hint if sess.language_hint else detect_language(text)
 
@@ -1538,6 +1971,9 @@ def on_photo(data):
         except Exception:
             pass
 
+    # ── Record usage ─────────────────────────────────────────────────────
+    record_scan(sess, is_ai=is_ai_scan and ai_used)
+
     _bulk_block_num = None
     if sess.bulk_capture:
         sess.bulk_session_blocks += 1
@@ -1546,6 +1982,7 @@ def on_photo(data):
     emit("result", {
         "text": text, "lang": lang, "ai_used": ai_used,
         "syntax_ok": syntax_ok, "syntax_err": syntax_err,
+        "plan_usage": plan_usage_payload(sess),
     })
     _status_data = {
         "capturing": False,
@@ -1798,9 +2235,9 @@ def on_fix_session_file(data=None):
 def on_save_result(data=None):
     """Save accumulated scans to Supabase Storage exports folder."""
     sess = get_session(request.sid)
-    _d = data or {}
+    _d   = data or {}
 
-    # Always read from live_buffer first (all accumulated scans), fall back to last scan
+    # ── Read accumulated text ─────────────────────────────────────────────
     if sess.user_id and SUPABASE_URL:
         text = supabase_read_text(_sb_storage_path(sess.user_id)).strip()
     else:
@@ -1815,49 +2252,113 @@ def on_save_result(data=None):
         emit("result_saved", {"error": "No content to save"})
         return
 
-    use_ai    = bool(_d.get("ai_fix", False))
-    use_model = str(_d.get("model", sess.llm_model_key)).strip().lower()
-    if use_model not in ("haiku", "sonnet"):
-        use_model = sess.llm_model_key
-
-    lang = str(_d.get("lang", "")).strip()
+    use_ai = bool(_d.get("ai_fix", False))
+    lang   = str(_d.get("lang", "")).strip()
     if not lang or lang == "unknown":
         lang = detect_language(text)
     if not lang or lang == "unknown":
         lang = "text"
 
+    line_count = len(text.splitlines())
+
+    # ── Check file save limit ─────────────────────────────────────────────
+    file_ok, file_msg = check_file_save_limit(sess)
+    if not file_ok:
+        emit("result_saved", {"error": file_msg})
+        return
+
     corrected = text
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    api_key   = os.environ.get("ANTHROPIC_API_KEY", "")
+    haiku_tok = sonnet_tok = 0
+
     if use_ai and HAS_ANTHROPIC and api_key:
-        emit("status", {"capturing": False, "msg": f"Fixing with Claude {use_model.capitalize()}..."})
-        try:
-            fixed = llm_fix_full_file(text, lang, model_key=use_model, session=sess)
+        # ── Check AI fix limits ───────────────────────────────────────────
+        fix_ok, fix_msg, use_sonnet = check_ai_fix_limits(sess, line_count)
+        if not fix_ok:
+            emit("result_saved", {"error": fix_msg, "plan_usage": plan_usage_payload(sess)})
+            return
+
+        max_fix_lines = sess.plan_limits.get("max_lines_fix", 99999)
+        fix_token_cap = sess.plan_limits.get("fix_token_cap", 99999)
+        model_key     = "sonnet" if use_sonnet else "haiku"
+        model_name    = LLM_MODELS[model_key]
+
+        # ── Starter: file too large → chunk into ≤300-line parts ─────────
+        if sess.plan == "starter" and line_count > max_fix_lines:
+            lines_list = text.splitlines()
+            chunk_size = max_fix_lines  # 300
+            chunks     = [lines_list[i:i + chunk_size]
+                          for i in range(0, len(lines_list), chunk_size)]
+            emit("status", {"capturing": False,
+                            "msg": f"File is {line_count} lines. Starter supports {max_fix_lines} lines. "
+                                   f"Saving as {len(chunks)} parts."})
+            results = []
+            for idx, chunk in enumerate(chunks, 1):
+                chunk_text = "\n".join(chunk)
+                tt = {"input": 0, "output": 0, "model": model_name}
+                fixed_chunk = llm_fix_full_file(chunk_text, lang, model_key=model_key,
+                                                session=sess, token_tracker=tt)
+                haiku_tok += tt["input"] + tt["output"]
+                results.append(fixed_chunk or chunk_text)
+            corrected = "\n".join(results)
+        # ── Pro: >max_lines → chunk + merge ──────────────────────────────
+        elif sess.plan == "pro" and line_count > max_fix_lines:
+            lines_list = text.splitlines()
+            chunk_size = 1000
+            chunks     = [lines_list[i:i + chunk_size]
+                          for i in range(0, len(lines_list), chunk_size)]
+            emit("status", {"capturing": False,
+                            "msg": f"Large file ({line_count} lines). Chunking and fixing with {model_key.capitalize()}..."})
+            results = []
+            for chunk in chunks:
+                chunk_text = "\n".join(chunk)
+                tt = {"input": 0, "output": 0, "model": model_name}
+                fixed_chunk = llm_fix_full_file(chunk_text, lang, model_key=model_key,
+                                                session=sess, token_tracker=tt)
+                if use_sonnet:
+                    sonnet_tok += tt["input"] + tt["output"]
+                else:
+                    haiku_tok  += tt["input"] + tt["output"]
+                results.append(fixed_chunk or chunk_text)
+            corrected = "\n".join(results)
+        else:
+            # Normal fix
+            emit("status", {"capturing": False,
+                            "msg": f"Fixing with Claude {model_key.capitalize()}..."})
+            tt = {"input": 0, "output": 0, "model": model_name}
+            fixed = llm_fix_full_file(text, lang, model_key=model_key,
+                                      session=sess, token_tracker=tt)
             if fixed and fixed.strip():
                 corrected = fixed
-        except Exception as e:
-            emit("status", {"capturing": False, "msg": f"Fix warning: {e} — saving raw OCR"})
+            if use_sonnet:
+                sonnet_tok = tt["input"] + tt["output"]
+            else:
+                haiku_tok  = tt["input"] + tt["output"]
 
+        # Record fix usage
+        record_ai_fix(sess, haiku_tokens=haiku_tok, sonnet_tokens=sonnet_tok)
+
+    # ── Build filename ────────────────────────────────────────────────────
     user_filename = str(_d.get("filename", "")).strip()
     if user_filename:
         user_filename = os.path.basename(user_filename)
         user_filename = re.sub(r"[^\w\-. ()]+", "_", user_filename).strip("_. ")
-    if user_filename:
-        new_name = user_filename
-    else:
-        ext     = _EXT_MAP.get(lang, ".txt")
-        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        new_name = f"{now_str}_{lang}{ext}"
+    new_name = user_filename or (
+        f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{lang}{_EXT_MAP.get(lang, '.txt')}"
+    )
 
+    # ── Save to storage ───────────────────────────────────────────────────
     download_url = ""
     n_blocks = len([b for b in text.split("\n\n") if b.strip()])
     if sess.user_id and SUPABASE_URL:
         export_path = _sb_export_path(sess.user_id, new_name)
         ok = supabase_write_text(export_path, corrected)
         if not ok:
-            emit("result_saved", {"error": "Failed to save to Supabase Storage — check bucket 'camtocode' exists and SUPABASE_SERVICE_KEY is correct"})
+            emit("result_saved", {"error": "Failed to save to Supabase Storage — check bucket 'camtocode' exists"})
             return
         download_url = supabase_signed_url(export_path, expires_in=86400)
         supabase_log_capture(sess.user_id, new_name, lang, n_blocks)
+        record_file_saved(sess)
     else:
         try:
             with open(new_name, "w", encoding="utf-8") as f:
@@ -1871,17 +2372,123 @@ def on_save_result(data=None):
         "lang":         lang,
         "filename":     new_name,
         "download_url": download_url,
+        "plan_usage":   plan_usage_payload(sess),
     })
     emit("status", {"capturing": False, "msg": f"Saved as {new_name}"})
-    # Clear the live buffer so next set of scans starts fresh
+
+    # Clear live buffer so next set of scans starts fresh
     if sess.user_id and SUPABASE_URL:
         supabase_write_text(_sb_storage_path(sess.user_id), "")
     sess.last_saved = ""
 
 
+@socketio.on("get_plan_usage")
+def on_get_plan_usage():
+    """Return current plan + usage snapshot. Frontend calls this to refresh the badge."""
+    sess = get_session(request.sid)
+    # Refresh from DB if cache is >60s old
+    if sess.user_id and (_time.time() - sess.usage_loaded_at) > 60:
+        load_user_plan_usage(sess)
+    emit("plan_usage", plan_usage_payload(sess))
+
+
 # ---------------------------------------------------------------------------
-# Entry point
+# Admin HTTP routes
 # ---------------------------------------------------------------------------
+def _require_admin(request_obj) -> tuple[dict | None, str]:
+    """Verify token and admin role. Returns (payload, error_msg)."""
+    auth    = request_obj.headers.get("Authorization", "")
+    token   = auth.removeprefix("Bearer ").strip()
+    payload = verify_supabase_token(token)
+    if not payload:
+        return None, "Unauthorized"
+    email = payload.get("email", "")
+    if email not in ADMIN_EMAILS:
+        return None, "Forbidden — admin only"
+    return payload, ""
+
+@app.route("/api/admin/users")
+def admin_list_users():
+    """List all users with plan + usage (admin only)."""
+    payload, err = _require_admin(request)
+    if err:
+        return jsonify({"error": err}), (401 if err == "Unauthorized" else 403)
+
+    # Fetch all auth users
+    try:
+        resp = httpx.get(
+            f"{SUPABASE_URL}/auth/v1/admin/users?per_page=500",
+            headers={"Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+                     "apikey": SUPABASE_SERVICE_KEY},
+            timeout=15,
+        )
+        users = resp.json().get("users", []) if resp.status_code == 200 else []
+    except Exception:
+        users = []
+
+    month = datetime.now().strftime("%Y-%m")
+    today = datetime.now().strftime("%Y-%m-%d")
+    result = []
+    for u in users:
+        uid   = u.get("id", "")
+        email = u.get("email", "")
+        plan  = db_get_plan(uid) if uid else "free"
+        if email in ADMIN_EMAILS:
+            plan = "admin"
+        daily   = db_get_daily(uid, today)   if uid else {}
+        monthly = db_get_monthly(uid, month) if uid else {}
+        result.append({
+            "id":            uid,
+            "email":         email,
+            "created_at":    u.get("created_at", ""),
+            "plan":          plan,
+            "scans_today":   daily.get("scans", 0),
+            "ai_scans_today":daily.get("ai_scans", 0),
+            "scans_month":   monthly.get("scans", 0),
+            "ai_fixes_month":monthly.get("ai_fixes", 0),
+            "haiku_fix_tok": monthly.get("haiku_fix_tokens", 0),
+            "sonnet_fix_tok":monthly.get("sonnet_fix_tokens", 0),
+            "files_saved":   monthly.get("files_saved", 0),
+        })
+    return jsonify({"users": result, "total": len(result)})
+
+
+@app.route("/api/admin/users/<user_id>/files")
+def admin_user_files(user_id: str):
+    """List files for any user (admin only)."""
+    payload, err = _require_admin(request)
+    if err:
+        return jsonify({"error": err}), (401 if err == "Unauthorized" else 403)
+    files = supabase_list_exports(user_id)
+    result = []
+    for f in files:
+        full_path    = f.get("name", "")
+        display_name = full_path.split("/")[-1]
+        signed = supabase_signed_url(full_path)
+        result.append({
+            "name":         display_name,
+            "created_at":   f.get("created_at", ""),
+            "size":         f.get("metadata", {}).get("size", 0),
+            "download_url": signed,
+        })
+    return jsonify({"files": result})
+
+
+@app.route("/api/admin/set_plan", methods=["POST"])
+def admin_set_plan():
+    """Change a user's plan (admin only)."""
+    payload, err = _require_admin(request)
+    if err:
+        return jsonify({"error": err}), (401 if err == "Unauthorized" else 403)
+    body    = request.get_json(force=True) or {}
+    user_id = body.get("user_id", "")
+    plan    = body.get("plan", "")
+    if not user_id or plan not in PLANS:
+        return jsonify({"error": "user_id and valid plan required"}), 400
+    db_upsert_plan(user_id, plan)
+    return jsonify({"ok": True, "user_id": user_id, "plan": plan})
+
+
 # Start frame worker thread at module level so it runs under gunicorn too
 _worker_thread = threading.Thread(target=_frame_worker, daemon=True)
 _worker_thread.start()

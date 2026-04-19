@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { createClient } from '@/lib/supabase'
+import UsageBadge, { type PlanUsage } from './UsageBadge'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
@@ -121,6 +122,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   // ROI state
   const [roi,     setRoi]     = useState<ROI | null>(null)
   const [showRoi, setShowRoi] = useState(false)
+  // Plan / usage
+  const [planUsage, setPlanUsage] = useState<PlanUsage | null>(null)
+  const [limitMsg,  setLimitMsg]  = useState('')
 
   // Keep refs in sync with state
   useEffect(() => { roiRef.current = roi }, [roi])
@@ -411,6 +415,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setAutoCapture(d.auto_capture); setAutoClear(d.auto_clear_after_export)
         setLlmModel(d.llm_model); setBulkCapture(d.bulk_capture)
         setBulkBlocks(d.bulk_session_blocks); setBulkSession(d.bulk_session_number)
+        if (d.plan_usage) setPlanUsage(d.plan_usage)
         addLog('State received')
       })
 
@@ -419,6 +424,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         if (typeof d.capturing === 'boolean') setCapturing(d.capturing)
         if (d.bulk_block  !== undefined) setBulkBlocks(d.bulk_block)
         if (d.bulk_session !== undefined) setBulkSession(d.bulk_session)
+        if ((d as any).limit_hit) setLimitMsg(d.msg)
+        if ((d as any).plan_usage) setPlanUsage((d as any).plan_usage)
       })
 
       sock.on('quality', (d: QualityData) => {
@@ -431,10 +438,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       sock.on('result', (d: ResultData) => {
         setFinalText(prev => prev ? prev + '\n\n' + d.text : d.text)
         setScanCount(prev => prev + 1)
-        setLiveText('')
+        setLiveText(''); setLimitMsg('')
         setLastLang(d.lang); setAiUsed(d.ai_used)
         setSyntaxOk(d.syntax_ok); setSyntaxErr(d.syntax_err || '')
         if (d.download_url) setLastDownload(d.download_url)
+        if ((d as any).plan_usage) setPlanUsage((d as any).plan_usage)
         addLog('result: ' + d.lang + ' ai=' + d.ai_used)
         const ext = _LANG_EXT[d.lang] || '.txt'
         const ts  = new Date().toISOString().slice(0, 10).replace(/-/g, '')
@@ -461,9 +469,12 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setSaveFilename(''); setPendingLang('')
         if (d.error) { setStatusMsg('Save error: ' + d.error); addLog('save error: ' + d.error); return }
         if (d.download_url) setLastDownload(d.download_url)
+        if (d.plan_usage) setPlanUsage(d.plan_usage)
         setFinalText(''); setLiveText(''); setScanCount(0)
         setStatusMsg('Saved: ' + d.filename + ' — ready for next session'); addLog('saved: ' + d.filename)
       })
+
+      sock.on('plan_usage', (d: PlanUsage) => setPlanUsage(d))
 
       sock.on('language_set', (d: { language: string }) => setLanguage(d.language === 'auto' ? '' : d.language))
     }
@@ -604,10 +615,29 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
           <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug log">🪲</button>
           <a href="/history" style={s.historyLink}>History</a>
+          {planUsage?.plan === 'admin' && (
+            <a href="/admin" style={{ ...s.historyLink, color: '#f59e0b' }}>Admin</a>
+          )}
           <button onClick={() => setShowSettings(v => !v)} style={s.iconBtn}>⚙️</button>
           <button onClick={handleSignOut} style={s.signOutBtn}>Sign Out</button>
         </div>
       </div>
+
+      {/* Plan usage badge */}
+      {planUsage && (
+        <div style={{ padding: '0.5rem 1rem', display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <UsageBadge usage={planUsage} compact />
+          {limitMsg && (
+            <div style={{
+              background: 'rgba(248,113,113,0.15)', border: '1px solid #f87171',
+              borderRadius: 8, padding: '0.45rem 0.9rem', fontSize: '0.78rem', color: '#fca5a5',
+              maxWidth: 420, alignSelf: 'center',
+            }}>
+              ⚠️ {limitMsg}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Debug log */}
       {showDebug && (
