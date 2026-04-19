@@ -2,6 +2,13 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase'
 
+function getRedirectTarget() {
+  if (typeof window === 'undefined') return '/app'
+  const p = new URLSearchParams(window.location.search).get('redirect')
+  if (p === 'pricing' || p === 'account') return '/account'
+  return '/app'
+}
+
 export default function LoginPage() {
   const supabase = createClient()
   const [email, setEmail]     = useState('')
@@ -22,7 +29,7 @@ export default function LoginPage() {
       if (error) {
         setError(error.message)
       } else {
-        window.location.href = '/app'
+        window.location.href = getRedirectTarget()
       }
     } else {
       const { error } = await supabase.auth.signUp({ email, password })
@@ -36,6 +43,9 @@ export default function LoginPage() {
   }
 
   const handleGoogleLogin = async () => {
+    // Save redirect intent so /auth/callback can pick it up after OAuth
+    const p = new URLSearchParams(window.location.search).get('redirect')
+    if (p) sessionStorage.setItem('loginRedirect', p)
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: `${window.location.origin}/auth/callback` },

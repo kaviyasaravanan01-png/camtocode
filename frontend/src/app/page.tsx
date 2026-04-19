@@ -156,7 +156,7 @@ const FAQ = [
   },
   {
     q: 'When will Razorpay / payment be available?',
-    a: 'Payments via Razorpay (for India) and Stripe (worldwide) are coming soon. Contact us to be notified or to arrange manual plan upgrades in the meantime.',
+    a: 'Razorpay payments are live now for Starter ($7/mo) and Pro ($18/mo) plans. Click "Upgrade" on any plan card or visit your Account page after signing in. International payments via Stripe are coming soon.',
   },
   {
     q: 'Is my data safe?',

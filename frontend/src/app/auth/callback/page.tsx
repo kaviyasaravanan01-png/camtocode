@@ -5,9 +5,13 @@ import { createClient } from '@/lib/supabase'
 export default function AuthCallback() {
   useEffect(() => {
     const supabase = createClient()
-    // createBrowserClient auto-exchanges the PKCE code from URL params
     supabase.auth.getSession().then(({ data: { session } }) => {
-      window.location.href = session ? '/app' : '/'
+      if (!session) { window.location.href = '/'; return }
+      // Respect redirect param stored before Google OAuth (e.g. ?redirect=pricing)
+      const stored = sessionStorage.getItem('loginRedirect') || ''
+      sessionStorage.removeItem('loginRedirect')
+      const target = (stored === 'pricing' || stored === 'account') ? '/account' : '/app'
+      window.location.href = target
     })
   }, [])
 
