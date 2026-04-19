@@ -2426,6 +2426,16 @@ def _require_auth(request_obj) -> tuple[dict | None, str]:
 
 
 def _require_admin(request_obj) -> tuple[dict | None, str]:
+    """Verify token and admin role. Returns (payload, error_msg)."""
+    auth    = request_obj.headers.get("Authorization", "")
+    token   = auth.removeprefix("Bearer ").strip()
+    payload = verify_supabase_token(token)
+    if not payload:
+        return None, "Unauthorized"
+    email = payload.get("email", "")
+    if email not in ADMIN_EMAILS:
+        return None, "Forbidden — admin only"
+    return payload, ""
 
 # ---------------------------------------------------------------------------
 # Razorpay payment endpoints
