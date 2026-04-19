@@ -1761,8 +1761,11 @@ def on_fix_session_file(data=None):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+# Start frame worker thread at module level so it runs under gunicorn too
+_worker_thread = threading.Thread(target=_frame_worker, daemon=True)
+_worker_thread.start()
+print("[startup] Frame worker thread started", flush=True)
+
 if __name__ == "__main__":
-    _worker_thread = threading.Thread(target=_frame_worker, daemon=True)
-    _worker_thread.start()
     print(f"\nCamToCode (multi-user) ready on port {PORT}\n", flush=True)
     socketio.run(app, host="0.0.0.0", port=PORT, debug=False, use_reloader=False)

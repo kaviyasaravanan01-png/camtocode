@@ -62,7 +62,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
   // UI state
   const [capturing,    setCapturing]    = useState(false)
-  const [statusMsg,    setStatusMsg]    = useState('Ready')
+  const [socketStatus, setSocketStatus] = useState<'connecting'|'connected'|'error'>('connecting')
+  const [statusMsg,    setStatusMsg]    = useState('Connecting to server...')
   const [outputText,   setOutputText]   = useState('')
   const [qualityLabel, setQualityLabel] = useState('')
   const [qualityScore, setQualityScore] = useState(0)
@@ -110,8 +111,21 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
       socketRef.current = sock
 
-      sock.on('connect', () => setStatusMsg('Connected — point at code and press Start'))
-      sock.on('connect_error', (e) => setStatusMsg('Connection error: ' + e.message))
+      sock.on('connect', () => {
+        setSocketStatus('connected')
+        setStatusMsg('Connected — point at code and press Start')
+        console.log('[socket] connected', sock.id)
+      })
+      sock.on('connect_error', (e) => {
+        setSocketStatus('error')
+        setStatusMsg('Backend connection failed: ' + e.message)
+        console.error('[socket] connect_error', e)
+      })
+      sock.on('disconnect', (reason) => {
+        setSocketStatus('connecting')
+        setStatusMsg('Disconnected: ' + reason)
+        console.warn('[socket] disconnected', reason)
+      })
 
       sock.on('init_state', (data: any) => {
         setAiEnabled(data.ai_enabled)
@@ -301,6 +315,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       <div style={s.header}>
         <span style={s.logoText}>CamToCode</span>
         <div style={s.headerRight}>
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
+            background: socketStatus === 'connected' ? '#22c55e' : socketStatus === 'error' ? '#ef4444' : '#eab308',
+            title: socketStatus,
+          }} />
           <a href="/history" style={s.historyLink}>History</a>
           <button onClick={() => setShowSettings(!showSettings)} style={s.iconBtn} title="Settings">⚙️</button>
           <button onClick={handleSignOut} style={s.signOutBtn}>Sign Out</button>
