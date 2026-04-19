@@ -16,28 +16,29 @@ export default function HistoryPage({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState('')
 
-  useEffect(() => {
-    const fetchFiles = async () => {
-      try {
-        const supabase = createClient()
-        const { data: { session } } = await supabase.auth.getSession()
-        const token = session?.access_token || ''
+  const fetchFiles = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const supabase = createClient()
+      const { data: { session } } = await supabase.auth.getSession()
+      const token = session?.access_token || ''
 
-        const resp = await fetch(`${BACKEND_URL}/api/exports/${userId}`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
+      const resp = await fetch(`${BACKEND_URL}/api/exports/${userId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
 
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-        const data = await resp.json()
-        setFiles(data.files || [])
-      } catch (e: any) {
-        setError(e.message)
-      } finally {
-        setLoading(false)
-      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      const data = await resp.json()
+      setFiles(data.files || [])
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
     }
-    fetchFiles()
-  }, [userId])
+  }
+
+  useEffect(() => { fetchFiles() }, [userId])
 
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`
@@ -66,6 +67,9 @@ export default function HistoryPage({ userId }: { userId: string }) {
       <div style={s.header}>
         <a href="/app" style={s.backLink}>← Back to App</a>
         <h1 style={s.title}>My Exports</h1>
+        <button onClick={fetchFiles} disabled={loading} style={s.refreshBtn}>
+          {loading ? '...' : '↻ Refresh'}
+        </button>
       </div>
 
       <div style={s.content}>
@@ -185,5 +189,16 @@ const s: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     fontSize: '0.8rem',
     flexShrink: 0,
+  },
+  refreshBtn: {
+    marginLeft: 'auto',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#e2e8f0',
+    border: '1px solid rgba(255,255,255,0.15)',
+    borderRadius: 8,
+    padding: '0.35rem 0.9rem',
+    fontSize: '0.8rem',
+    fontWeight: 600,
+    cursor: 'pointer',
   },
 }

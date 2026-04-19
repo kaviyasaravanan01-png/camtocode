@@ -169,7 +169,15 @@ _frame_queue: queue.Queue = queue.Queue(maxsize=32)
 def _sb_headers() -> dict:
     return {
         "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey":        SUPABASE_SERVICE_KEY,
         "Content-Type":  "application/octet-stream",
+    }
+
+def _sb_json_headers() -> dict:
+    return {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
+        "apikey":        SUPABASE_SERVICE_KEY,
+        "Content-Type":  "application/json",
     }
 
 def _sb_storage_path(user_id: str) -> str:
@@ -223,14 +231,14 @@ def supabase_signed_url(path: str, expires_in: int = 3600) -> str:
         resp = httpx.post(
             url,
             json={"expiresIn": expires_in},
-            headers={
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/json",
-            },
+            headers=_sb_json_headers(),
             timeout=10,
         )
         if resp.status_code == 200:
-            return resp.json().get("signedURL", "")
+            signed = resp.json().get("signedURL", "")
+            # signedURL is a relative path — prepend Supabase URL
+            if signed:
+                return f"{SUPABASE_URL}{signed}" if signed.startswith("/") else signed
         return ""
     except Exception:
         return ""
@@ -243,18 +251,46 @@ def supabase_list_exports(user_id: str) -> list[dict]:
     try:
         resp = httpx.post(
             url,
-            json={"prefix": f"{user_id}/exports/", "limit": 100},
-            headers={
-                "Authorization": f"Bearer {SUPABASE_SERVICE_KEY}",
-                "Content-Type": "application/json",
-            },
+            json={"prefix": f"{user_id}/exports/", "limit": 100, "sortBy": {"column": "created_at", "order": "desc"}},
+            headers=_sb_json_headers(),
             timeout=10,
         )
         if resp.status_code == 200:
             return resp.json()
+        print(f"[supabase_list_exports] status={resp.status_code} body={resp.text[:200]}", flush=True)
         return []
-    except Exception:
+    except Exception as e:
+        print(f"[supabase_list_exports] error: {e}", flush=True)
         return []
+
+def supabase_ensure_bucket() -> bool:
+    """Create the 'camtocode' bucket if it doesn't exist. Called at startup."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return False
+    # Check if bucket exists
+    url = f"{SUPABASE_URL}/storage/v1/bucket/camtocode"
+    try:
+        resp = httpx.get(url, headers=_sb_json_headers(), timeout=10)
+        if resp.status_code == 200:
+            print("[startup] Supabase bucket 'camtocode' exists.", flush=True)
+            return True
+        # Try to create it
+        create_url = f"{SUPABASE_URL}/storage/v1/bucket"
+        resp2 = httpx.post(
+            create_url,
+            json={"id": "camtocode", "name": "camtocode", "public": False},
+            headers=_sb_json_headers(),
+            timeout=10,
+        )
+        if resp2.status_code in (200, 201):
+            print("[startup] Supabase bucket 'camtocode' created.", flush=True)
+            return True
+        print(f"[startup] Bucket create status={resp2.status_code}: {resp2.text[:200]}", flush=True)
+        return False
+    except Exception as e:
+        print(f"[startup] supabase_ensure_bucket error: {e}", flush=True)
+        return False
+
 
 def supabase_log_capture(user_id: str, filename: str, lang: str, blocks: int):
     """Insert a row into the captures table via Supabase REST API."""
@@ -1816,7 +1852,10 @@ def on_save_result(data=None):
     n_blocks = len([b for b in text.split("\n\n") if b.strip()])
     if sess.user_id and SUPABASE_URL:
         export_path = _sb_export_path(sess.user_id, new_name)
-        supabase_write_text(export_path, corrected)
+        ok = supabase_write_text(export_path, corrected)
+        if not ok:
+            emit("result_saved", {"error": "Failed to save to Supabase Storage — check bucket 'camtocode' exists and SUPABASE_SERVICE_KEY is correct"})
+            return
         download_url = supabase_signed_url(export_path, expires_in=86400)
         supabase_log_capture(sess.user_id, new_name, lang, n_blocks)
     else:
@@ -1847,6 +1886,7 @@ def on_save_result(data=None):
 _worker_thread = threading.Thread(target=_frame_worker, daemon=True)
 _worker_thread.start()
 print("[startup] Frame worker thread started", flush=True)
+supabase_ensure_bucket()
 
 if __name__ == "__main__":
     print(f"\nCamToCode (multi-user) ready on port {PORT}\n", flush=True)
