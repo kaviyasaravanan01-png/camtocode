@@ -1,0 +1,1964 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>CamToCode</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    :root {
+      --bg:      #0d1117;
+      --surface: #161b22;
+      --border:  #30363d;
+      --text:    #c9d1d9;
+      --muted:   #8b949e;
+      --green:   #238636;
+      --red:     #da3633;
+      --blue:    #58a6ff;
+      --orange:  #f0883e;
+      --yellow:  #d29922;
+      --purple:  #a371f7;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
+      padding: 13px 13px 16px;
+      min-height: 100dvh;
+    }
+
+    /* --- Header --- */
+    header { display: flex; align-items: center; gap: 9px; }
+    header h1 { font-size: 1.2rem; color: var(--blue); font-weight: 700; }
+
+    /* --- Status bar --- */
+    #status-bar {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 9px 12px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 0.8rem;
+      min-height: 40px;
+    }
+    #dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #f85149;
+      flex-shrink: 0;
+      transition: background .3s;
+    }
+    #dot.on   { background: var(--green); }
+    #dot.live { background: var(--orange); animation: blink 1s ease-in-out infinite; }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .2; } }
+
+    /* --- Camera view --- */
+    #cam-wrap {
+      position: relative;
+      border-radius: 13px;
+      overflow: hidden;
+      background: #000;
+      flex: 1;
+      min-height: 200px;
+      border: 1px solid var(--border);
+    }
+    video { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+    /* ROI selection overlay canvas */
+    #roi-canvas {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      cursor: crosshair;
+      z-index: 10;
+      touch-action: none;
+    }
+
+    /* Focus ring — shown at tap point */
+    #focus-ring {
+      position: absolute;
+      width: 52px; height: 52px;
+      border: 2px solid #fff;
+      border-radius: 5px;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      display: none;
+      z-index: 15;
+      box-shadow: 0 0 0 1px rgba(0,0,0,.4);
+    }
+    #focus-ring.show { display: block; animation: focus-pulse .7s ease-out forwards; }
+    @keyframes focus-pulse {
+      0%   { opacity: 1; transform: translate(-50%, -50%) scale(1.4); }
+      100% { opacity: 0; transform: translate(-50%, -50%) scale(1);   }
+    }
+
+    /* Scan line animation during capture */
+    #scan-line {
+      position: absolute; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, var(--orange) 40%, var(--orange) 60%, transparent);
+      top: 0; display: none;
+      animation: scan 2s linear infinite;
+      box-shadow: 0 0 8px var(--orange);
+      z-index: 5;
+    }
+    @keyframes scan { from { top: 0%; } to { top: 100%; } }
+    #cam-wrap.capturing #scan-line { display: block; }
+
+    /* Corner markers */
+    .corner {
+      position: absolute; width: 20px; height: 20px;
+      border-color: var(--blue); border-style: solid;
+      opacity: 0; transition: opacity .3s; z-index: 6;
+    }
+    #cam-wrap.capturing .corner { opacity: 1; }
+    .corner.tl { top: 10px;    left: 10px;  border-width: 2px 0 0 2px; }
+    .corner.tr { top: 10px;    right: 10px; border-width: 2px 2px 0 0; }
+    .corner.bl { bottom: 10px; left: 10px;  border-width: 0 0 2px 2px; }
+    .corner.br { bottom: 10px; right: 10px; border-width: 0 2px 2px 0; }
+
+    /* Glare warning badge */
+    #glare-badge {
+      position: absolute; top: 9px; right: 9px;
+      background: rgba(218,54,51,.92);
+      color: #fff; font-size: .68rem; font-weight: 700;
+      padding: 3px 8px; border-radius: 6px;
+      display: none; z-index: 20;
+    }
+    #glare-badge.show { display: block; }
+
+    canvas#capture-canvas { display: none; }
+
+    /* --- Quality bar --- */
+    #quality-row { display: flex; align-items: center; gap: 9px; }
+    #q-label { font-size: .7rem; color: var(--muted); width: 52px; flex-shrink: 0; white-space: nowrap; }
+    #q-track { flex: 1; height: 5px; background: var(--border); border-radius: 3px; overflow: hidden; }
+    #q-fill  { height: 100%; width: 0%; background: var(--red); border-radius: 3px; transition: width .35s, background .35s; }
+    #q-fill.ok    { background: var(--yellow); }
+    #q-fill.sharp { background: var(--green); }
+    #frame-badge {
+      font-size: .68rem; color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px; padding: 2px 10px;
+      white-space: nowrap; flex-shrink: 0;
+      transition: color .2s, border-color .2s;
+    }
+    #frame-badge.has { color: var(--blue); border-color: var(--blue); }
+
+    /* --- Zoom hint --- */
+    #zoom-hint { display: none; text-align: center; font-size: .75rem; padding: 7px 10px; border-radius: 8px; font-weight: 500; }
+    #zoom-hint.closer  { background: rgba(240,136,62,.15); color: var(--orange); display: block; }
+    #zoom-hint.farther { background: rgba(240,136,62,.15); color: var(--orange); display: block; }
+    #zoom-hint.good    { background: rgba(35,134,54,.12);  color: var(--green);  display: block; }
+
+    /* --- Buttons --- */
+    .controls { display: flex; gap: 10px; }
+    button {
+      flex: 1; padding: 15px 10px; border: none; border-radius: 12px;
+      font-size: .95rem; font-weight: 600; cursor: pointer;
+      transition: transform .1s, opacity .15s;
+    }
+    button:active:not(:disabled) { transform: scale(.95); }
+    button:disabled { opacity: .3; cursor: default; }
+    #btn-start { background: var(--green); color: #fff; }
+    #btn-stop  { background: var(--red);   color: #fff; }
+    #btn-photo {
+      flex: 0 0 auto; padding: 15px 16px;
+      background: var(--purple); color: #fff;
+      font-size: .85rem; font-weight: 700;
+      border: none; border-radius: 12px;
+    }
+    #btn-photo:disabled { opacity: .3; }
+    #btn-clear {
+      flex: 0 0 auto; padding: 15px 16px;
+      background: var(--surface); color: var(--muted);
+      font-size: 1.05rem; border: 1px solid var(--border);
+    }
+
+    /* --- Settings panel --- */
+    details#settings-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    summary {
+      padding: 11px 14px; cursor: pointer;
+      display: flex; align-items: center; justify-content: space-between;
+      font-size: .82rem; font-weight: 600;
+      list-style: none; user-select: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    .summary-left { display: flex; align-items: center; gap: 7px; }
+    .arrow { font-size: .8rem; color: var(--muted); transition: transform .2s; }
+    details[open] .arrow { transform: rotate(180deg); }
+    .settings-body { border-top: 1px solid var(--border); padding: 4px 0; }
+    .setting-row {
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 11px 14px;
+    }
+    .setting-row + .setting-row { border-top: 1px solid var(--border); }
+    .setting-info { flex: 1; min-width: 0; }
+    .setting-name { font-size: .82rem; font-weight: 500; }
+    .setting-desc { font-size: .68rem; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+
+    /* iOS-style toggle */
+    .ios-toggle { display: inline-flex; flex-shrink: 0; cursor: pointer; }
+    .ios-toggle input { display: none; }
+    .ios-toggle .track {
+      width: 42px; height: 24px;
+      background: var(--border); border-radius: 12px;
+      position: relative; transition: background .25s;
+    }
+    .ios-toggle .thumb {
+      position: absolute; width: 20px; height: 20px;
+      background: #fff; border-radius: 50%;
+      top: 2px; left: 2px;
+      transition: transform .25s;
+      box-shadow: 0 1px 4px rgba(0,0,0,.3);
+    }
+    .ios-toggle input:checked + .track { background: var(--blue); }
+    .ios-toggle input:checked + .track .thumb { transform: translateX(18px); }
+    .ios-toggle.disabled { opacity: .4; pointer-events: none; }
+
+    /* Badges */
+    .badge {
+      font-size: .68rem; font-weight: 600;
+      padding: 3px 9px; border-radius: 20px;
+      border: 1px solid var(--border); color: var(--muted);
+      white-space: nowrap; flex-shrink: 0;
+    }
+    .badge.roi-on  { color: var(--blue);  border-color: var(--blue); }
+    .badge.active  { color: var(--green); border-color: var(--green); }
+
+    /* ROI preset buttons */
+    #roi-presets { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 8px; }
+    .roi-preset-btn {
+      font-size: .68rem; padding: 4px 9px;
+      background: var(--bg); color: var(--muted);
+      border: 1px solid var(--border); border-radius: 6px;
+      flex: 0 0 auto; cursor: pointer; font-weight: 500;
+    }
+    .roi-preset-btn:active { opacity: .65; transform: scale(.95); }
+
+    .text-btn {
+      font-size: .72rem; color: var(--blue);
+      background: none; border: 1px solid var(--blue);
+      border-radius: 6px; padding: 4px 10px;
+      flex: unset; flex-shrink: 0; cursor: pointer; font-weight: 500;
+    }
+    .text-btn:active { opacity: .7; transform: none; }
+
+    /* --- OCR Preview --- */
+    .section label {
+      display: block; font-size: .68rem; color: var(--muted);
+      text-transform: uppercase; letter-spacing: .07em; margin-bottom: 6px;
+    }
+    #preview {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px; padding: 11px;
+      font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+      font-size: .7rem; line-height: 1.65;
+      max-height: 200px; overflow-y: auto;
+      white-space: pre-wrap; word-break: break-all;
+      color: var(--muted); transition: color .2s;
+    }
+    #preview.active { color: var(--text); }
+
+    /* ---- Confidence heatmap token colours ---- */
+    /* green  ≥90  — Tesseract very confident: almost certainly correct        */
+    /* yellow 70-89 — likely correct but worth a glance                        */
+    /* orange 50-69 — suspect: OCR may have misread                            */
+    /* red    <50   — high-risk misread, highlighted background to stand out   */
+    .hm-hi   { color: #3fb950; }
+    .hm-med  { color: #d29922; }
+    .hm-low  { color: #f0883e; }
+    .hm-bad  {
+      color: #f85149;
+      background: rgba(248,81,73,.14);
+      border-radius: 2px;
+      outline: 1px solid rgba(248,81,73,.25);
+    }
+
+    /* Legend strip below preview */
+    #hm-legend {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      padding: 5px 11px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-top: none;
+      border-radius: 0 0 10px 10px;
+      font-size: .62rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+    #hm-legend.show { display: flex; }
+    .hm-dot {
+      display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; margin-right: 3px; vertical-align: middle;
+    }
+    #hm-avg-badge {
+      margin-left: auto;
+      font-size: .62rem; font-weight: 600;
+      padding: 2px 8px; border-radius: 10px;
+      border: 1px solid var(--border); color: var(--muted);
+    }
+
+    /* Syntax error banner */
+    #syntax-banner {
+      display: none;
+      background: rgba(218,54,51,.12);
+      border: 1px solid rgba(218,54,51,.4);
+      border-radius: 7px; padding: 7px 11px;
+      font-size: .72rem; color: #f85149; line-height: 1.4;
+    }
+    #syntax-banner.show { display: block; }
+
+    .tip { font-size: .68rem; color: var(--muted); text-align: center; line-height: 1.5; }
+
+    /* --- File switcher (inline panel inside settings) --- */
+    #file-switcher {
+      border-top: 1px solid var(--border);
+      padding: 10px 14px 4px;
+      display: none; flex-direction: column; gap: 8px;
+    }
+    #file-switcher.open { display: flex; }
+    .file-input-row { display: flex; gap: 8px; align-items: center; }
+    .file-input-row input {
+      flex: 1; background: var(--bg);
+      border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); padding: 8px 10px; font-size: .78rem; outline: none;
+    }
+    .file-input-row input:focus { border-color: var(--blue); }
+    .file-input-row input::placeholder { color: var(--muted); }
+    #file-list-items { display: flex; flex-direction: column; gap: 1px; max-height: 160px; overflow-y: auto; }
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 10px; border-radius: 7px; cursor: pointer; gap: 10px;
+      transition: background .15s;
+    }
+    .file-item:hover  { background: var(--border); }
+    .file-item.active { background: rgba(88,166,255,.1); }
+    .file-item-name {
+      font-size: .75rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      color: var(--text); flex: 1; min-width: 0;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .file-item.active .file-item-name { color: var(--blue); }
+    .file-item-tag {
+      font-size: .62rem; font-weight: 700;
+      padding: 2px 6px; border-radius: 4px; flex-shrink: 0;
+    }
+    .file-item-tag.current { background: rgba(88,166,255,.2); color: var(--blue); }
+    .file-item-tag.append  { background: rgba(35,134,54,.15);  color: var(--green); }
+
+    /* Model toggle group */
+    .model-toggle-group { display: flex; gap: 4px; flex-shrink: 0; }
+    .model-btn {
+      font-size: .72rem; font-weight: 600;
+      padding: 5px 12px; border-radius: 6px; cursor: pointer;
+      background: var(--bg); border: 1px solid var(--border); color: var(--muted);
+      flex: unset; transition: background .15s, color .15s, border-color .15s;
+    }
+    .model-btn:active { transform: scale(.95); }
+    .model-btn.active {
+      background: rgba(163,113,247,.15);
+      border-color: var(--purple); color: var(--purple);
+    }
+
+    /* Auto-capture progress bar */
+    #auto-cap-bar {
+      position: absolute; bottom: 0; left: 0;
+      height: 3px; background: var(--blue);
+      width: 0%; transition: width .3s;
+      z-index: 8; border-radius: 0 2px 2px 0;
+    }
+
+    /* --- Zoom controls overlay --- */
+    #zoom-controls {
+      position: absolute; bottom: 10px; left: 10px;
+      display: flex; align-items: center; gap: 5px; z-index: 20;
+    }
+    #zoom-controls .z-btn {
+      width: 34px; height: 34px;
+      background: rgba(0,0,0,.6); backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,.22); border-radius: 50%;
+      color: #fff; font-size: 1.25rem;
+      display: flex; align-items: center; justify-content: center;
+      flex: unset; padding: 0; cursor: pointer; transition: background .15s;
+    }
+    #zoom-controls .z-btn:active:not(:disabled) { background: rgba(88,166,255,.45); }
+    #zoom-controls .z-btn:disabled { opacity: .28; cursor: default; }
+    #zoom-display {
+      color: #fff; font-size: .72rem; font-weight: 700;
+      background: rgba(0,0,0,.5); padding: 3px 7px;
+      border-radius: 6px; min-width: 36px; text-align: center; user-select: none;
+    }
+
+    /* --- Fit / Fill toggle --- */
+    #btn-fit-toggle {
+      position: absolute; bottom: 10px; right: 10px; z-index: 20;
+      background: rgba(0,0,0,.6); backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 8px; color: #fff; font-size: .72rem; font-weight: 700;
+      padding: 7px 13px; flex: unset; cursor: pointer;
+      transition: background .15s, border-color .15s, color .15s;
+    }
+    #btn-fit-toggle.active {
+      background: rgba(88,166,255,.2);
+      border-color: var(--blue); color: var(--blue);
+    }
+
+    /* --- Bulk Export section --- */
+    #bulk-export-section { display: none; flex-direction: column; gap: 9px; }
+    #bulk-export-section.show { display: flex; }
+    #btn-fix-export {
+      background: linear-gradient(135deg, var(--purple) 0%, var(--blue) 100%);
+      color: #fff; border: none; border-radius: 12px;
+      padding: 14px 10px; font-size: .92rem; font-weight: 700;
+      cursor: pointer; transition: opacity .15s, transform .1s;
+      width: 100%;
+    }
+    #btn-fix-export:active:not(:disabled) { transform: scale(.97); opacity: .9; }
+    #btn-fix-export:disabled { opacity: .35; cursor: default; }
+    #session-result-banner {
+      display: none;
+      background: rgba(35,134,54,.12);
+      border: 1px solid rgba(35,134,54,.4);
+      border-radius: 9px; padding: 10px 13px;
+      font-size: .75rem; line-height: 1.65; color: var(--text);
+    }
+    #session-result-banner.show { display: block; }
+    #session-result-banner .export-filename {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      color: var(--green); font-weight: 600; word-break: break-all;
+    }
+    #session-result-banner.error {
+      background: rgba(218,54,51,.10);
+      border-color: rgba(218,54,51,.35);
+    }
+    #session-result-banner.error .export-filename { color: #f85149; }
+
+    /* --- Export filename modal --- */
+    #export-modal-backdrop {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.55); z-index: 900;
+      align-items: center; justify-content: center;
+      padding: 20px;
+    }
+    #export-modal-backdrop.show { display: flex; }
+    #export-modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 16px; padding: 20px 18px 18px;
+      width: 100%; max-width: 400px;
+      box-shadow: 0 20px 60px rgba(0,0,0,.45);
+    }
+    #export-modal h3 {
+      margin: 0 0 3px; font-size: .92rem; font-weight: 700; color: var(--text);
+    }
+    #export-modal p {
+      margin: 0 0 14px; font-size: .72rem; color: var(--muted);
+    }
+    #export-filename-input {
+      width: 100%; box-sizing: border-box;
+      background: var(--bg); color: var(--text);
+      border: 1px solid var(--border); border-radius: 9px;
+      padding: 10px 12px; font-size: .82rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      outline: none; margin-bottom: 16px;
+    }
+    #export-filename-input:focus { border-color: var(--blue); }
+    .export-modal-btns {
+      display: flex; gap: 8px; justify-content: flex-end;
+    }
+    .export-modal-btns button {
+      border: none; border-radius: 9px; padding: 9px 20px;
+      font-size: .82rem; font-weight: 600; cursor: pointer;
+    }
+    #btn-modal-cancel {
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border) !important;
+    }
+    #btn-modal-cancel:active { opacity: .7; }
+    #btn-modal-export {
+      background: linear-gradient(135deg, var(--purple) 0%, var(--blue) 100%);
+      color: #fff;
+    }
+    #btn-modal-export:active { opacity: .85; }
+
+    /* AI Fix row & model row inside modal */
+    .export-opt-row {
+      display: flex; align-items: center;
+      justify-content: space-between; gap: 8px;
+      padding: 9px 12px; margin-bottom: 10px;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 9px;
+    }
+    .export-opt-title { font-size: .78rem; font-weight: 600; color: var(--text); }
+    .export-opt-desc  { font-size: .67rem; color: var(--muted); margin-top: 2px; }
+    #export-model-row { transition: opacity .15s; }
+    #export-model-row.hidden { display: none; }
+    /* Export-modal model buttons — independent from global .model-btn sync */
+    .export-model-btn {
+      font-size: .72rem; font-weight: 600;
+      padding: 5px 12px; border-radius: 6px; cursor: pointer;
+      background: var(--bg); border: 1px solid var(--border); color: var(--muted);
+      transition: background .15s, color .15s, border-color .15s;
+    }
+    .export-model-btn:active { transform: scale(.95); }
+    .export-model-btn.active {
+      background: rgba(163,113,247,.15);
+      border-color: var(--purple); color: var(--purple);
+    }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <svg width="24" height="24" viewBox="0 0 24 24" fill="none"
+       stroke="var(--blue)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3L14.5 4z"/>
+    <circle cx="12" cy="13" r="3"/>
+  </svg>
+  <h1>CamToCode</h1>
+</header>
+
+<!-- Status bar -->
+<div id="status-bar">
+  <div id="dot"></div>
+  <span id="status-msg">Connecting to server…</span>
+</div>
+
+<!-- Camera viewfinder -->
+<div id="cam-wrap">
+  <video id="video" autoplay playsinline muted></video>
+  <!-- ROI selection overlay: tap = focus lock, drag = select region -->
+  <canvas id="roi-canvas"></canvas>
+  <!-- Animated focus ring -->
+  <div id="focus-ring"></div>
+  <!-- Capture scan line -->
+  <div id="scan-line"></div>
+  <!-- Corner alignment marks -->
+  <div class="corner tl"></div>
+  <div class="corner tr"></div>
+  <div class="corner bl"></div>
+  <div class="corner br"></div>
+  <!-- Glare warning -->
+  <div id="glare-badge">&#9888; Glare</div>
+  <!-- Auto-capture progress bar -->
+  <div id="auto-cap-bar"></div>
+  <!-- Zoom controls -->
+  <div id="zoom-controls">
+    <button class="z-btn" id="btn-zoom-out" title="Zoom out">&#8722;</button>
+    <span id="zoom-display">1.0&#215;</span>
+    <button class="z-btn" id="btn-zoom-in"  title="Zoom in">+</button>
+  </div>
+  <!-- Fit / Fill toggle -->
+  <button id="btn-fit-toggle" title="Toggle 4:3 fit vs full-height fill">Fit</button>
+</div>
+
+<!-- Hidden canvas for frame capture -->
+<canvas id="capture-canvas"></canvas>
+
+<!-- Sharpness quality bar -->
+<div id="quality-row">
+  <span id="q-label">Sharpness</span>
+  <div id="q-track"><div id="q-fill"></div></div>
+  <span id="frame-badge">0 frames</span>
+</div>
+<div id="zoom-hint"></div>
+
+<!-- Hidden file input for native camera photo capture -->
+<input type="file" id="photo-input" accept="image/*" capture="environment" style="display:none">
+
+<!-- Main controls -->
+<div class="controls">
+  <button id="btn-start" disabled>&#9654; Start</button>
+  <button id="btn-stop"  disabled>&#9632; Stop</button>
+  <button id="btn-photo" disabled title="Take a single high-res photo (better quality than video frames)">&#128247; Photo</button>
+  <button id="btn-clear" title="Clear output.txt">&#128465;</button>
+</div>
+<p class="tip" style="margin-top:-4px">&#128247; <strong>Photo mode</strong>: opens native camera for a full-res single shot — best for accuracy</p>
+
+<!-- Settings panel -->
+<details id="settings-panel">
+  <summary>
+    <span class="summary-left">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+           stroke="var(--muted)" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+      Settings
+    </span>
+    <span class="arrow">&#9660;</span>
+  </summary>
+
+  <div class="settings-body">
+
+    <!-- Night Mode -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Night / HDR Mode</div>
+        <div class="setting-desc">Stronger contrast for dark IDE themes in dim rooms</div>
+      </div>
+      <label class="ios-toggle">
+        <input type="checkbox" id="toggle-night">
+        <span class="track"><span class="thumb"></span></span>
+      </label>
+    </div>
+
+    <!-- AI Correction -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">
+          AI Correction
+          <span id="ai-model-badge" style="font-size:.65rem;color:var(--purple);font-weight:600">CLAUDE HAIKU</span>
+        </div>
+        <div class="setting-desc" id="ai-desc">Uses Claude to fix OCR errors &middot; ~$0.0003/capture &middot; Requires ANTHROPIC_API_KEY</div>
+      </div>
+      <label class="ios-toggle">
+        <input type="checkbox" id="toggle-ai">
+        <span class="track"><span class="thumb"></span></span>
+      </label>
+    </div>
+
+    <!-- LLM Model selector (shown only when AI is enabled) -->
+    <div class="setting-row" id="model-row" style="display:none">
+      <div class="setting-info">
+        <div class="setting-name">AI Model</div>
+        <div class="setting-desc">Haiku = fast &amp; cheap &middot; Sonnet = slower, handles complex code better</div>
+      </div>
+      <div class="model-toggle-group">
+        <button class="model-btn active" id="btn-haiku"  data-model="haiku">Haiku</button>
+        <button class="model-btn"        id="btn-sonnet" data-model="sonnet">Sonnet</button>
+      </div>
+    </div>
+
+    <!-- Auto-capture -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Auto-Capture</div>
+        <div class="setting-desc" id="auto-cap-desc">Auto-stops after 6 consecutive sharp frames &ndash; hands-free capture</div>
+      </div>
+      <label class="ios-toggle">
+        <input type="checkbox" id="toggle-auto-capture">
+        <span class="track"><span class="thumb"></span></span>
+      </label>
+    </div>
+
+    <!-- Bulk Capture -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Bulk Capture</div>
+        <div class="setting-desc">Capture multiple code blocks in one session &mdash; tracks block count, all saved to the same file</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <span id="bulk-session-badge" class="badge" style="display:none">0 blocks</span>
+        <button class="text-btn" id="btn-bulk-reset" style="display:none">Reset</button>
+        <label class="ios-toggle">
+          <input type="checkbox" id="toggle-bulk-capture">
+          <span class="track"><span class="thumb"></span></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Auto-Clear After Export (NEW) -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Auto-Clear After Export</div>
+        <div class="setting-desc">Automatically clear output.txt after each successful capture — keeps your file clean between sessions</div>
+      </div>
+      <label class="ios-toggle">
+        <input type="checkbox" id="toggle-auto-clear">
+        <span class="track"><span class="thumb"></span></span>
+      </label>
+    </div>
+
+    <!-- Capture Region (ROI) -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Capture Region</div>
+        <div class="setting-desc">Drag on camera to draw region. Grab handles to resize. Drag inside to move. Tap = focus.</div>
+        <div id="roi-presets">
+          <button class="roi-preset-btn" data-roi="0,0,1,0.5">Top ½</button>
+          <button class="roi-preset-btn" data-roi="0,0.5,1,1">Bottom ½</button>
+          <button class="roi-preset-btn" data-roi="0,0,0.5,1">Left ½</button>
+          <button class="roi-preset-btn" data-roi="0.5,0,1,1">Right ½</button>
+          <button class="roi-preset-btn" data-roi="0.02,0.08,0.98,0.92">Code Area</button>
+          <button class="roi-preset-btn" data-roi="0.05,0.12,0.95,0.88">Center</button>
+        </div>
+      </div>
+      <span id="roi-badge" class="badge">Full frame</span>
+      <button class="text-btn" id="btn-roi-clear">Reset</button>
+    </div>
+
+    <!-- Language Preset -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Language Preset</div>
+        <div class="setting-desc">Select before scanning for higher accuracy. Auto-detect if unsure.</div>
+      </div>
+      <select id="lang-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;">
+        <option value="">Auto-detect</option>
+        <optgroup label="Web">
+          <option value="html">HTML</option>
+          <option value="css">CSS</option>
+          <option value="javascript">JavaScript</option>
+          <option value="typescript">TypeScript</option>
+          <option value="react">React / JSX</option>
+          <option value="nextjs">NextJS</option>
+          <option value="nestjs">NestJS</option>
+        </optgroup>
+        <optgroup label="General Purpose">
+          <option value="python">Python</option>
+          <option value="java">Java</option>
+          <option value="cpp">C++</option>
+          <option value="go">Go</option>
+          <option value="rust">Rust</option>
+          <option value="swift">Swift</option>
+          <option value="kotlin">Kotlin</option>
+          <option value="ruby">Ruby</option>
+          <option value="php">PHP</option>
+        </optgroup>
+        <optgroup label="Data">
+          <option value="sql">SQL</option>
+        </optgroup>
+      </select>
+    </div>
+
+    <!-- #14 Font-size tip -->
+    <div class="setting-row" style="background:rgba(255,200,0,0.07);border-left:3px solid #f0a500;padding-left:10px;border-radius:4px;">
+      <div class="setting-info">
+        <div class="setting-name" style="color:#f0a500;">💡 Tip: Increase Font Size for Better OCR</div>
+        <div class="setting-desc">Larger text = fewer misreads. Aim for <strong>18–22 pt</strong> in your editor.<br>
+          VS Code: <code>Ctrl&nbsp;+&nbsp;=</code> &nbsp;|&nbsp; macOS: <code>⌘&nbsp;+&nbsp;=</code></div>
+      </div>
+    </div>
+
+    <!-- Detected Language -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Detected Language</div>
+        <div class="setting-desc">Auto-detected from OCR result</div>
+      </div>
+      <span id="lang-badge" class="badge">&mdash;</span>
+    </div>
+
+    <!-- Output File -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Output File</div>
+        <div class="setting-desc" id="file-desc">Saving to: output.txt</div>
+      </div>
+      <button class="text-btn" id="btn-file-toggle">Switch</button>
+    </div>
+
+    <!-- Inline file switcher panel -->
+    <div id="file-switcher">
+      <div class="file-input-row">
+        <input id="new-file-input" type="text" placeholder="filename.txt"
+               autocomplete="off" autocorrect="off" spellcheck="false">
+        <button class="text-btn" id="btn-file-create">New File</button>
+      </div>
+      <div id="file-list-items"></div>
+    </div>
+
+  </div>
+</details>
+
+<!-- Bulk session export (visible when bulk mode is on and blocks > 0) -->
+<div id="bulk-export-section">
+  <button id="btn-fix-export">Export</button>
+  <div id="session-result-banner"></div>
+</div>
+
+<!-- OCR Preview -->
+<div class="section">
+  <label>Live OCR Preview <span id="hm-title" style="font-weight:600;text-transform:none;letter-spacing:0;display:none">— confidence heatmap</span></label>
+  <div id="preview" style="border-radius:10px 10px 0 0">Point rear camera at code on screen, then tap &#9654; Start&hellip;</div>
+  <div id="hm-legend">
+    <span><span class="hm-dot" style="background:#3fb950"></span>≥90% sure</span>
+    <span><span class="hm-dot" style="background:#d29922"></span>70–89%</span>
+    <span><span class="hm-dot" style="background:#f0883e"></span>50–69%</span>
+    <span><span class="hm-dot" style="background:#f85149"></span>&lt;50% misread risk</span>
+    <span id="hm-avg-badge">avg —</span>
+  </div>
+</div>
+
+<!-- Syntax error banner -->
+<div id="syntax-banner"></div>
+
+<p class="tip">Drag camera view to select region &middot; Tap to focus lock &middot; Start &rarr; Stop &rarr; scroll &rarr; repeat</p>
+
+<script>
+// ---------------------------------------------------------------------------
+// DOM refs
+// ---------------------------------------------------------------------------
+const video         = document.getElementById('video');
+const roiCvs        = document.getElementById('roi-canvas');
+const roiCtx        = roiCvs.getContext('2d');
+const capCvs        = document.getElementById('capture-canvas');
+const capCtx        = capCvs.getContext('2d');
+const focusRing     = document.getElementById('focus-ring');
+const dot           = document.getElementById('dot');
+const statusMsg     = document.getElementById('status-msg');
+const preview       = document.getElementById('preview');
+const hmLegend      = document.getElementById('hm-legend');
+const hmAvgBadge    = document.getElementById('hm-avg-badge');
+const hmTitle       = document.getElementById('hm-title');
+const camWrap       = document.getElementById('cam-wrap');
+const glareBadge    = document.getElementById('glare-badge');
+const qFill         = document.getElementById('q-fill');
+const qLabel        = document.getElementById('q-label');
+const frameBadge    = document.getElementById('frame-badge');
+const zoomHint      = document.getElementById('zoom-hint');
+const btnStart      = document.getElementById('btn-start');
+const btnStop       = document.getElementById('btn-stop');
+const btnPhoto      = document.getElementById('btn-photo');
+const photoInput    = document.getElementById('photo-input');
+const btnClear      = document.getElementById('btn-clear');
+const btnRoiClear   = document.getElementById('btn-roi-clear');
+const roiBadge      = document.getElementById('roi-badge');
+const langBadge     = document.getElementById('lang-badge');
+const langSelect    = document.getElementById('lang-select');
+const toggleNight   = document.getElementById('toggle-night');
+const toggleAI      = document.getElementById('toggle-ai');
+const toggleAutoCap = document.getElementById('toggle-auto-capture');
+const toggleAutoClear = document.getElementById('toggle-auto-clear');
+const modelRow      = document.getElementById('model-row');
+const aiModelBadge  = document.getElementById('ai-model-badge');
+const autoCapDesc   = document.getElementById('auto-cap-desc');
+const autoCapBar    = document.getElementById('auto-cap-bar');
+const syntaxBanner  = document.getElementById('syntax-banner');
+const fileDesc      = document.getElementById('file-desc');
+const fileSwitcher  = document.getElementById('file-switcher');
+const btnFileToggle = document.getElementById('btn-file-toggle');
+const btnFileCreate = document.getElementById('btn-file-create');
+const newFileInput  = document.getElementById('new-file-input');
+const fileListEl    = document.getElementById('file-list-items');
+const btnZoomIn     = document.getElementById('btn-zoom-in');
+const btnZoomOut    = document.getElementById('btn-zoom-out');
+const zoomDisplay   = document.getElementById('zoom-display');
+const btnFitToggle      = document.getElementById('btn-fit-toggle');
+const toggleBulkCap      = document.getElementById('toggle-bulk-capture');
+const bulkSessionBadge   = document.getElementById('bulk-session-badge');
+const btnBulkReset       = document.getElementById('btn-bulk-reset');
+const bulkExportSection  = document.getElementById('bulk-export-section');
+const btnFixExport       = document.getElementById('btn-fix-export');
+const sessionResultBanner= document.getElementById('session-result-banner');
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+const FRAME_MS  = 800;   // ms between frames sent to backend
+const SHARP_MAX = 400;   // clamp for quality bar display
+
+let intervalId       = null;
+let processingTimer  = null;
+let activeFile       = 'output.txt';
+let roi              = null;   // {x1, y1, x2, y2} normalised 0-1
+// ROI interaction state
+let roiInteraction   = 'idle'; // 'idle' | 'draw' | 'move' | 'resize'
+let roiActiveHandle  = -1;     // 0-7 during resize
+let roiDrawStart     = null;   // {x,y} normalised, for new-draw
+let roiDragStartPx   = null;   // {x,y} canvas px, drag origin
+let roiAtDragStart   = null;   // snapshot of roi at drag start
+let roiDragDist      = 0;      // px travelled since pointerdown
+let focusTimer       = null;
+let autoCapFrames    = 6;     // updated from init_state
+let currentLlmModel  = 'haiku';
+let zoomLevel        = 1.0;
+let zoomMin          = 1.0;
+let zoomMax          = 10.0;
+let zoomStep         = 0.5;
+let fitMode          = false; // false = fill (flex:1), true = 4:3 fit
+let _cameraReady     = false;
+let _socketReady     = false;
+let bulkSessionBlocks  = 0;
+let bulkSessionNumber  = 1;
+
+function _checkReady() {
+  btnStart.disabled = !(_cameraReady && _socketReady);
+  btnPhoto.disabled = !(_cameraReady && _socketReady);
+  if (_cameraReady && _socketReady) {
+    setStatus('Ready – tap ▶ Start to capture or 📷 Photo for single shot', 'on');
+  }
+}
+
+const socket = io();
+
+// ---------------------------------------------------------------------------
+// File management
+// ---------------------------------------------------------------------------
+function updateFileDesc(filename) {
+  activeFile = filename;
+  fileDesc.textContent = 'Saving to: ' + filename;
+  btnClear.title = 'Clear ' + filename;
+}
+
+function renderFileList(files, current) {
+  fileListEl.innerHTML = '';
+  if (!files || !files.length) return;
+  files.forEach(name => {
+    const isCurrent = name === current;
+    const item      = document.createElement('div');
+    item.className  = 'file-item' + (isCurrent ? ' active' : '');
+    // Use textContent (not innerHTML) so filenames with < > & don't cause XSS
+    const nameSpan      = document.createElement('span');
+    nameSpan.className  = 'file-item-name';
+    nameSpan.textContent = '\uD83D\uDCC4 ' + name;
+    const tagSpan       = document.createElement('span');
+    tagSpan.className   = 'file-item-tag ' + (isCurrent ? 'current' : 'append');
+    tagSpan.textContent = isCurrent ? 'current' : 'append';
+    item.appendChild(nameSpan);
+    item.appendChild(tagSpan);
+    if (!isCurrent) {
+      item.addEventListener('click', () => socket.emit('set_file', { name }));
+    }
+    fileListEl.appendChild(item);
+  });
+}
+
+function toggleFileSwitcher() {
+  const open = fileSwitcher.classList.toggle('open');
+  btnFileToggle.textContent = open ? 'Close' : 'Switch';
+  if (open) {
+    socket.emit('get_files');
+    newFileInput.value = '';
+    newFileInput.focus();
+  }
+}
+
+btnFileToggle.addEventListener('click', toggleFileSwitcher);
+btnFileCreate.addEventListener('click', () => {
+  const raw  = newFileInput.value.trim();
+  const name = raw ? (raw.endsWith('.txt') ? raw : raw + '.txt') : '';
+  if (!name) { newFileInput.focus(); return; }
+  socket.emit('set_file', { name });
+  newFileInput.value = '';
+});
+newFileInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') btnFileCreate.click();
+});
+
+// ---------------------------------------------------------------------------
+// Camera
+// ---------------------------------------------------------------------------
+async function initCamera() {
+  setStatus('Starting camera…', '');
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'environment',
+        width:  { ideal: 1920 },
+        height: { ideal: 1080 },
+      },
+      audio: false,
+    });
+    video.srcObject = stream;
+    video.addEventListener('loadedmetadata', () => {
+      video.play().catch(() => {});
+      initZoom();
+      _cameraReady = true;
+      _checkReady();
+    }, { once: true });
+  } catch (err) {
+    setStatus('Camera error: ' + err.message, '');
+  }
+}
+
+async function tapToFocus(nx, ny) {
+  if (!video.srcObject) return;
+  const track = video.srcObject.getVideoTracks()[0];
+  const caps  = track.getCapabilities ? track.getCapabilities() : {};
+  if (caps.pointOfInterest) {
+    try {
+      await track.applyConstraints({
+        advanced: [{ pointOfInterest: { x: nx, y: ny }, focusMode: 'single-shot' }],
+      });
+    } catch (_) { /* not supported on this device — visual feedback still shown */ }
+  }
+}
+
+function showFocusRing(nx, ny) {
+  focusRing.style.left = (nx * 100) + '%';
+  focusRing.style.top  = (ny * 100) + '%';
+  focusRing.classList.remove('show');
+  void focusRing.offsetWidth; // force reflow to restart animation
+  focusRing.classList.add('show');
+  clearTimeout(focusTimer);
+  focusTimer = setTimeout(() => focusRing.classList.remove('show'), 1200);
+}
+
+// ---------------------------------------------------------------------------
+// Night Mode
+// ---------------------------------------------------------------------------
+async function applyNightMode(on) {
+  if (video.srcObject) {
+    const track = video.srcObject.getVideoTracks()[0];
+    try {
+      if (on) {
+        await track.applyConstraints({
+          advanced: [{ exposureMode: 'manual', exposureTime: 5000, iso: 400 }],
+        });
+      } else {
+        await track.applyConstraints({
+          advanced: [{ exposureMode: 'continuous' }],
+        });
+      }
+    } catch (_) { /* camera constraints not supported — backend handles preprocessing */ }
+  }
+  socket.emit('set_night', { enabled: on });
+}
+
+// ---------------------------------------------------------------------------
+// Zoom
+// ---------------------------------------------------------------------------
+function updateZoomDisplay() {
+  zoomDisplay.textContent = zoomLevel.toFixed(1) + '\xD7';
+  btnZoomOut.disabled = zoomLevel <= zoomMin;
+  btnZoomIn.disabled  = zoomLevel >= zoomMax;
+}
+
+async function applyZoom(newVal) {
+  if (!video.srcObject) return;
+  const track = video.srcObject.getVideoTracks()[0];
+  zoomLevel = Math.max(zoomMin, Math.min(zoomMax, newVal));
+  try {
+    await track.applyConstraints({ advanced: [{ zoom: zoomLevel }] });
+  } catch (_) { /* zoom not supported by browser/device */ }
+  updateZoomDisplay();
+}
+
+function initZoom() {
+  if (!video.srcObject) return;
+  const track = video.srcObject.getVideoTracks()[0];
+  const caps  = track.getCapabilities ? track.getCapabilities() : {};
+  if (caps.zoom) {
+    zoomMin  = caps.zoom.min  ?? 1;
+    zoomMax  = caps.zoom.max  ?? 10;
+    zoomStep = caps.zoom.step ?? 0.5;
+    zoomLevel = zoomMin;
+    btnZoomOut.disabled = true;  // already at min
+    btnZoomIn.disabled  = false;
+  } else {
+    // Device does not expose zoom API — show greyed-out controls
+    btnZoomOut.disabled = true;
+    btnZoomIn.disabled  = true;
+  }
+  updateZoomDisplay();
+}
+
+btnZoomIn.addEventListener('click',  () => applyZoom(zoomLevel + zoomStep));
+btnZoomOut.addEventListener('click', () => applyZoom(zoomLevel - zoomStep));
+
+// ---------------------------------------------------------------------------
+// Fit / Fill toggle
+// ---------------------------------------------------------------------------
+function applyFitMode(fit) {
+  fitMode = fit;
+  if (fit) {
+    // 4:3 fixed
+    camWrap.style.flex        = '0 0 auto';
+    camWrap.style.minHeight   = '0';
+    camWrap.style.aspectRatio = '4/3';
+    btnFitToggle.textContent  = 'Fill';
+    btnFitToggle.classList.add('active');
+  } else {
+    // Full-height fill
+    camWrap.style.aspectRatio = '';
+    camWrap.style.flex        = '1';
+    camWrap.style.minHeight   = '200px';
+    btnFitToggle.textContent  = 'Fit';
+    btnFitToggle.classList.remove('active');
+  }
+  setTimeout(renderROI, 50); // re-render ROI overlay after layout reflows
+}
+
+btnFitToggle.addEventListener('click', () => applyFitMode(!fitMode));
+
+// ---------------------------------------------------------------------------
+// ROI (Region of Interest) — draw / move / resize + preset buttons
+// ---------------------------------------------------------------------------
+const HANDLE_R = 18;   // px hit radius (touch-friendly)
+const HANDLE_W = 10;   // px visual square side
+// Handle index layout:  0(TL) 1(TC) 2(TR)
+//                       3(ML)       4(MR)
+//                       5(BL) 6(BC) 7(BR)
+const HANDLE_CURSORS = [
+  'nwse-resize', 'ns-resize', 'nesw-resize',
+  'ew-resize',                'ew-resize',
+  'nesw-resize', 'ns-resize', 'nwse-resize',
+];
+
+function _getHandlePoints(rx, ry, rw, rh) {
+  return [
+    {x: rx,        y: ry},        // 0 TL
+    {x: rx + rw/2, y: ry},        // 1 TC
+    {x: rx + rw,   y: ry},        // 2 TR
+    {x: rx,        y: ry + rh/2}, // 3 ML
+    {x: rx + rw,   y: ry + rh/2}, // 4 MR
+    {x: rx,        y: ry + rh},   // 5 BL
+    {x: rx + rw/2, y: ry + rh},   // 6 BC
+    {x: rx + rw,   y: ry + rh},   // 7 BR
+  ];
+}
+
+function _roiPx() {
+  if (!roi) return null;
+  const r = camWrap.getBoundingClientRect();
+  const x = roi.x1 * r.width,  y = roi.y1 * r.height;
+  const w = (roi.x2 - roi.x1) * r.width;
+  const h = (roi.y2 - roi.y1) * r.height;
+  return {x, y, w, h};
+}
+
+function _hitHandle(cpx) {
+  const r = _roiPx(); if (!r) return -1;
+  const pts = _getHandlePoints(r.x, r.y, r.w, r.h);
+  for (let i = 0; i < 8; i++) {
+    const dx = cpx.x - pts[i].x, dy = cpx.y - pts[i].y;
+    if (Math.sqrt(dx*dx + dy*dy) < HANDLE_R) return i;
+  }
+  return -1;
+}
+
+function _insideRoi(cpx) {
+  const r = _roiPx(); if (!r) return false;
+  return cpx.x > r.x && cpx.x < r.x + r.w &&
+         cpx.y > r.y && cpx.y < r.y + r.h;
+}
+
+function _canvasPos(e) {
+  const r   = roiCvs.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : (e.changedTouches ? e.changedTouches[0] : e);
+  return {x: src.clientX - r.left, y: src.clientY - r.top};
+}
+
+function getRelPos(e) {
+  const r   = camWrap.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : (e.changedTouches ? e.changedTouches[0] : e);
+  return {
+    x: Math.max(0, Math.min(1, (src.clientX - r.left) / r.width)),
+    y: Math.max(0, Math.min(1, (src.clientY - r.top)  / r.height)),
+  };
+}
+
+function _clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function drawROIPreview(s, c) {
+  const r = camWrap.getBoundingClientRect();
+  roiCvs.width = r.width; roiCvs.height = r.height;
+  roiCtx.clearRect(0, 0, r.width, r.height);
+  const x = Math.min(s.x, c.x) * r.width,  y = Math.min(s.y, c.y) * r.height;
+  const w = Math.abs(c.x - s.x) * r.width, h = Math.abs(c.y - s.y) * r.height;
+  roiCtx.fillStyle = 'rgba(0,0,0,0.35)';
+  roiCtx.fillRect(0, 0, r.width, r.height);
+  roiCtx.clearRect(x, y, w, h);
+  roiCtx.strokeStyle = '#f0883e'; roiCtx.lineWidth = 2;
+  roiCtx.setLineDash([7, 3]);
+  roiCtx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+}
+
+function renderROI() {
+  const r = camWrap.getBoundingClientRect();
+  roiCvs.width = r.width; roiCvs.height = r.height;
+  roiCtx.clearRect(0, 0, r.width, r.height);
+  if (!roi) return;
+
+  const x = roi.x1 * r.width,  y = roi.y1 * r.height;
+  const w = (roi.x2 - roi.x1) * r.width;
+  const h = (roi.y2 - roi.y1) * r.height;
+
+  // Dim everything outside the ROI
+  roiCtx.fillStyle = 'rgba(0,0,0,0.50)';
+  roiCtx.fillRect(0, 0, r.width, r.height);
+  roiCtx.clearRect(x, y, w, h);
+
+  // Solid border
+  roiCtx.strokeStyle = '#58a6ff'; roiCtx.lineWidth = 2;
+  roiCtx.setLineDash([]);
+  roiCtx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+
+  // Dimension label inside box
+  const wpct = Math.round((roi.x2 - roi.x1) * 100);
+  const hpct = Math.round((roi.y2 - roi.y1) * 100);
+  roiCtx.fillStyle   = 'rgba(88,166,255,0.85)';
+  roiCtx.font        = 'bold 12px -apple-system, sans-serif';
+  roiCtx.textAlign   = 'center';
+  roiCtx.textBaseline = 'middle';
+  roiCtx.fillText(wpct + '% \xD7 ' + hpct + '%', x + w / 2, y + h / 2);
+
+  // Draw 8 resize handles
+  const pts = _getHandlePoints(x, y, w, h);
+  pts.forEach((pt, i) => {
+    roiCtx.fillStyle   = (i === roiActiveHandle) ? '#f0883e' : '#58a6ff';
+    roiCtx.strokeStyle = '#0d1117'; roiCtx.lineWidth = 1.5;
+    roiCtx.setLineDash([]);
+    roiCtx.fillRect(pt.x - HANDLE_W/2, pt.y - HANDLE_W/2, HANDLE_W, HANDLE_W);
+    roiCtx.strokeRect(pt.x - HANDLE_W/2, pt.y - HANDLE_W/2, HANDLE_W, HANDLE_W);
+  });
+}
+
+function updateRoiBadge() {
+  if (roi) {
+    const wpct = Math.round((roi.x2 - roi.x1) * 100);
+    const hpct = Math.round((roi.y2 - roi.y1) * 100);
+    roiBadge.textContent = wpct + '% \xD7 ' + hpct + '%';
+    roiBadge.classList.add('roi-on');
+  } else {
+    roiBadge.textContent = 'Full frame';
+    roiBadge.classList.remove('roi-on');
+  }
+}
+
+// --- Pointer events ---
+roiCvs.addEventListener('pointerdown', e => {
+  const cpx    = _canvasPos(e);
+  const relPos = getRelPos(e);
+  roiDragDist  = 0;
+  roiCvs.setPointerCapture(e.pointerId);
+
+  if (roi) {
+    const h = _hitHandle(cpx);
+    if (h !== -1) { // resize
+      roiInteraction = 'resize';
+      roiActiveHandle = h;
+      roiDragStartPx  = cpx;
+      roiAtDragStart  = {...roi};
+      roiCvs.style.cursor = HANDLE_CURSORS[h];
+      return;
+    }
+    if (_insideRoi(cpx)) { // move
+      roiInteraction = 'move';
+      roiActiveHandle = -1;
+      roiDragStartPx  = cpx;
+      roiAtDragStart  = {...roi};
+      roiCvs.style.cursor = 'grabbing';
+      return;
+    }
+  }
+  // draw new
+  roiInteraction  = 'draw';
+  roiActiveHandle = -1;
+  roiDrawStart    = relPos;
+  roiDragStartPx  = cpx;
+});
+
+roiCvs.addEventListener('pointermove', e => {
+  const cpx    = _canvasPos(e);
+  const relPos = getRelPos(e);
+  const wr     = camWrap.getBoundingClientRect();
+
+  if (roiInteraction === 'idle') {
+    if (roi) {
+      const h = _hitHandle(cpx);
+      if (h !== -1) roiCvs.style.cursor = HANDLE_CURSORS[h];
+      else if (_insideRoi(cpx)) roiCvs.style.cursor = 'grab';
+      else roiCvs.style.cursor = 'crosshair';
+    }
+    return;
+  }
+
+  const dx = cpx.x - roiDragStartPx.x;
+  const dy = cpx.y - roiDragStartPx.y;
+  roiDragDist = Math.sqrt(dx*dx + dy*dy);
+
+  if (roiInteraction === 'draw') {
+    if (roiDragDist > 8) drawROIPreview(roiDrawStart, relPos);
+    return;
+  }
+
+  const dxN = dx / wr.width;
+  const dyN = dy / wr.height;
+
+  if (roiInteraction === 'move') {
+    const bw = roiAtDragStart.x2 - roiAtDragStart.x1;
+    const bh = roiAtDragStart.y2 - roiAtDragStart.y1;
+    const nx1 = _clamp(roiAtDragStart.x1 + dxN, 0, 1 - bw);
+    const ny1 = _clamp(roiAtDragStart.y1 + dyN, 0, 1 - bh);
+    roi = {x1: nx1, y1: ny1, x2: nx1 + bw, y2: ny1 + bh};
+    renderROI(); updateRoiBadge();
+    return;
+  }
+
+  if (roiInteraction === 'resize') {
+    let {x1, y1, x2, y2} = roiAtDragStart;
+    const MIN = 0.05;
+    if ([0,3,5].includes(roiActiveHandle)) x1 = _clamp(x1 + dxN, 0, x2 - MIN);
+    if ([2,4,7].includes(roiActiveHandle)) x2 = _clamp(x2 + dxN, x1 + MIN, 1);
+    if ([0,1,2].includes(roiActiveHandle)) y1 = _clamp(y1 + dyN, 0, y2 - MIN);
+    if ([5,6,7].includes(roiActiveHandle)) y2 = _clamp(y2 + dyN, y1 + MIN, 1);
+    roi = {x1, y1, x2, y2};
+    renderROI(); updateRoiBadge();
+  }
+});
+
+roiCvs.addEventListener('pointercancel', () => {
+  roiInteraction = 'idle';
+  roiActiveHandle = -1;
+  roiCvs.style.cursor = 'crosshair';
+  renderROI();
+});
+
+roiCvs.addEventListener('pointerup', e => {
+  if (roiInteraction === 'idle') return;
+  const relPos = getRelPos(e);
+
+  if (roiInteraction === 'draw') {
+    if (roiDragDist < 8) {
+      tapToFocus(relPos.x, relPos.y);
+      showFocusRing(relPos.x, relPos.y);
+    } else {
+      const candidate = {
+        x1: Math.min(roiDrawStart.x, relPos.x),
+        y1: Math.min(roiDrawStart.y, relPos.y),
+        x2: Math.max(roiDrawStart.x, relPos.x),
+        y2: Math.max(roiDrawStart.y, relPos.y),
+      };
+      if (candidate.x2 - candidate.x1 > 0.05 && candidate.y2 - candidate.y1 > 0.05)
+        roi = candidate;
+    }
+  }
+
+  roiInteraction = 'idle';
+  roiActiveHandle = -1;
+  const cpx = _canvasPos(e);
+  roiCvs.style.cursor = roi && _insideRoi(cpx) ? 'grab' : 'crosshair';
+  renderROI();
+  updateRoiBadge();
+});
+
+// Preset buttons
+document.querySelectorAll('.roi-preset-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const [x1, y1, x2, y2] = btn.dataset.roi.split(',').map(Number);
+    roi = {x1, y1, x2, y2};
+    renderROI();
+    updateRoiBadge();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Frame capture (with ROI crop if active)
+// ---------------------------------------------------------------------------
+function sendFrame() {
+  if (!video.videoWidth) return;
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  let sx = 0, sy = 0, sw = vw, sh = vh;
+  if (roi) {
+    sx = Math.round(roi.x1 * vw);
+    sy = Math.round(roi.y1 * vh);
+    sw = Math.round((roi.x2 - roi.x1) * vw);
+    sh = Math.round((roi.y2 - roi.y1) * vh);
+  }
+  capCvs.width  = sw;
+  capCvs.height = sh;
+  capCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+  socket.emit('frame', { image: capCvs.toDataURL('image/jpeg', 0.97) });
+}
+
+// ---------------------------------------------------------------------------
+// Capture flow
+// ---------------------------------------------------------------------------
+function startCapture() {
+  if (!video.srcObject || !video.videoWidth) {
+    setStatus('Camera not ready – wait a moment and try again', '');
+    return;
+  }
+  socket.emit('start');
+  btnStart.disabled   = true;
+  btnStop.disabled    = false;
+  btnStop.textContent = '\u25A0 Stop';
+  camWrap.classList.add('capturing');
+  syntaxBanner.classList.remove('show');
+  resetQuality();
+  resetAutoCapBar();
+  sendFrame();
+  intervalId = setInterval(sendFrame, FRAME_MS);
+}
+
+function stopCapture() {
+  if (btnStop.disabled) return; // guard against double-invocation
+  clearInterval(intervalId);
+  intervalId = null;
+  socket.emit('stop');
+  btnStop.textContent = '\u23F3 Processing\u2026';
+  btnStop.disabled    = true;
+  btnStart.disabled   = true;
+  camWrap.classList.remove('capturing');
+  // Safety net: re-enable buttons if status event never arrives
+  clearTimeout(processingTimer);
+  processingTimer = setTimeout(() => {
+    btnStart.disabled   = false;
+    btnStop.disabled    = true;
+    btnStop.textContent = '\u25A0 Stop';
+    resetQuality();
+    setStatus('Processing timed out \u2013 try again', '');
+  }, 90000);
+}
+
+// ---------------------------------------------------------------------------
+// UI helpers
+// ---------------------------------------------------------------------------
+function setStatus(msg, dotClass) {
+  statusMsg.textContent = msg;
+  dot.className         = dotClass || '';
+}
+
+function resetQuality() {
+  qFill.style.width      = '0%';
+  qFill.className        = '';
+  qLabel.textContent     = 'Sharpness';
+  frameBadge.textContent = '0 frames';
+  frameBadge.classList.remove('has');
+  zoomHint.className     = '';
+  glareBadge.classList.remove('show');
+}
+
+function updateQuality(score, label, frames, glare, glarePct, zoomDir, zoomMsg, lang) {
+  const pct         = Math.min(100, Math.round((score / SHARP_MAX) * 100));
+  qFill.style.width = pct + '%';
+  qFill.className   = label === 'sharp' ? 'sharp' : (label === 'ok' ? 'ok' : '');
+  qLabel.textContent = label === 'sharp' ? 'Sharp \u2713' : (label === 'ok' ? 'OK' : 'Blurry');
+  if (frames !== undefined) {
+    frameBadge.textContent = frames + (frames === 1 ? ' frame' : ' frames');
+    frameBadge.className   = frames > 0 ? 'has' : '';
+  }
+  if (glare) {
+    glareBadge.textContent = '\u26A0 Glare ' + glarePct + '%';
+    glareBadge.classList.add('show');
+  } else {
+    glareBadge.classList.remove('show');
+  }
+  if (zoomDir && zoomDir !== 'unknown') {
+    zoomHint.textContent = zoomMsg;
+    zoomHint.className   = zoomDir;
+  } else {
+    zoomHint.className = '';
+  }
+  if (lang && lang !== 'unknown') {
+    langBadge.textContent = lang;
+    langBadge.classList.add('active');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bulk Capture helpers
+// ---------------------------------------------------------------------------
+function updateBulkExportVisibility() {
+  if (toggleBulkCap.checked && bulkSessionBlocks > 0) {
+    bulkExportSection.classList.add('show');
+  } else {
+    bulkExportSection.classList.remove('show');
+  }
+}
+
+function updateBulkBadge(n) {
+  bulkSessionBlocks = n;
+  bulkSessionBadge.textContent = n + (n === 1 ? ' block' : ' blocks');
+  updateBulkExportVisibility();
+}
+
+// ---------------------------------------------------------------------------
+// Auto-capture progress bar
+// ---------------------------------------------------------------------------
+function updateAutoCapBar(frames) {
+  if (!toggleAutoCap.checked || !autoCapFrames) return;
+  const pct = Math.min(100, Math.round((frames / autoCapFrames) * 100));
+  autoCapBar.style.width = pct + '%';
+}
+
+function resetAutoCapBar() {
+  autoCapBar.style.width = '0%';
+}
+
+// ---------------------------------------------------------------------------
+// Model selector
+// ---------------------------------------------------------------------------
+function setModelUI(key) {
+  currentLlmModel = key || 'haiku';
+  document.querySelectorAll('.model-btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.model === currentLlmModel);
+  });
+  aiModelBadge.textContent = currentLlmModel === 'sonnet' ? 'CLAUDE SONNET' : 'CLAUDE HAIKU';
+}
+
+document.querySelectorAll('.model-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    setModelUI(btn.dataset.model);
+    socket.emit('set_model', { model: btn.dataset.model });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Socket events
+// ---------------------------------------------------------------------------
+socket.on('connect', () => {
+  _socketReady = true;
+  _checkReady();
+});
+
+socket.on('disconnect', () => {
+  _socketReady = false;
+  clearTimeout(processingTimer);
+  setStatus('Disconnected from server', '');
+  btnStart.disabled   = true;
+  btnStop.disabled    = true;
+  btnStop.textContent = '\u25A0 Stop';
+  clearInterval(intervalId);
+  intervalId = null;
+  camWrap.classList.remove('capturing');
+});
+
+// ---------------------------------------------------------------------------
+// Heatmap helpers
+// ---------------------------------------------------------------------------
+
+/** HTML-escape for safe innerHTML injection */
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Build coloured HTML from a word-confidence list.
+// wordConfs: [{w, c}, ...] where c=-1 is a newline sentinel.
+// Confidence bands: green>=90, yellow>=70, orange>=50, red<50.
+// Every token Tesseract returns is coloured — identifiers, operators,
+// and all special chars used in code (braces, parens, colons, etc.).
+function buildHeatmapHtml(wordConfs) {
+  if (!wordConfs || wordConfs.length === 0) return '';
+
+  let html = '';
+  let totalConf = 0, wordCount = 0;
+
+  for (const {w, c} of wordConfs) {
+    if (c === -1) {          // line-break sentinel
+      html += '\n';
+      continue;
+    }
+    const esc = escapeHtml(w);
+    const cls = c >= 90 ? 'hm-hi' : c >= 70 ? 'hm-med' : c >= 50 ? 'hm-low' : 'hm-bad';
+    // tooltip shows the raw % so users know exact confidence
+    html += `<span class="${cls}" title="${c}%">${esc}</span> `;
+    totalConf += c;
+    wordCount++;
+  }
+
+  // Update the average confidence badge
+  if (wordCount > 0) {
+    const avg = Math.round(totalConf / wordCount);
+    const colour = avg >= 90 ? '#3fb950' : avg >= 70 ? '#d29922' : avg >= 50 ? '#f0883e' : '#f85149';
+    hmAvgBadge.textContent = `avg ${avg}%`;
+    hmAvgBadge.style.color        = colour;
+    hmAvgBadge.style.borderColor  = colour;
+  }
+
+  return html;
+}
+
+/** Show or hide the heatmap legend */
+function showHeatmap(wordConfs) {
+  if (!wordConfs || wordConfs.length === 0) {
+    hmLegend.classList.remove('show');
+    hmTitle.style.display = 'none';
+    return;
+  }
+  const html = buildHeatmapHtml(wordConfs);
+  preview.innerHTML = html;
+  preview.classList.add('active');
+  preview.scrollTop = preview.scrollHeight;
+  hmLegend.classList.add('show');
+  hmTitle.style.display = '';
+}
+
+/** Fall back to plain text (e.g. final corrected result from Claude) */
+function showPlainText(text) {
+  preview.textContent = text;
+  preview.classList.add('active');
+  preview.scrollTop = preview.scrollHeight;
+  // Keep legend if it was already showing, but clear avg badge
+  if (!hmLegend.classList.contains('show')) {
+    hmTitle.style.display = 'none';
+  }
+}
+
+socket.on('init_state', ({ ai_enabled, night_mode, auto_capture,
+                           auto_capture_frames, auto_clear_after_export,
+                           llm_model,
+                           current_file, files,
+                           bulk_capture: initBulk,
+                           bulk_session_blocks: initBulkBlocks,
+                           bulk_session_number: initBulkSession }) => {
+  toggleNight.checked   = night_mode   || false;
+  toggleAI.checked      = ai_enabled   || false;
+  toggleAutoCap.checked = (auto_capture !== undefined) ? auto_capture : true;
+  toggleAutoClear.checked = (auto_clear_after_export !== undefined) ? auto_clear_after_export : false;
+  socket.emit('set_auto', { enabled: toggleAutoCap.checked });
+  modelRow.style.display = ai_enabled ? '' : 'none';
+  if (auto_capture_frames) {
+    autoCapFrames = auto_capture_frames;
+    autoCapDesc.textContent =
+      'Auto-stops after ' + autoCapFrames + ' consecutive sharp frames \u2013 hands-free capture';
+  }
+  setModelUI(llm_model || 'haiku');
+  updateFileDesc(current_file || 'output.txt');
+  renderFileList(files || [], current_file || 'output.txt');
+  // Bulk capture state
+  toggleBulkCap.checked = initBulk || false;
+  if (initBulkSession) bulkSessionNumber = initBulkSession;
+  if (initBulk) {
+    bulkSessionBadge.style.display = '';
+    btnBulkReset.style.display = '';
+    updateBulkBadge(initBulkBlocks || 0);  // also calls updateBulkExportVisibility
+  }
+});
+
+socket.on('status', ({ capturing, msg, current_file, files, bulk_block, bulk_session }) => {
+  if (bulk_session !== undefined) bulkSessionNumber = bulk_session;
+  clearTimeout(processingTimer);
+  setStatus(msg, capturing ? 'live' : 'on');
+  if (!capturing) {
+    btnStop.textContent = '\u25A0 Stop';
+    btnStart.disabled   = false;
+    btnStop.disabled    = true;
+    btnPhoto.disabled   = !(_cameraReady && _socketReady);
+    resetQuality();
+  }
+  if (current_file) updateFileDesc(current_file);
+  if (files)        renderFileList(files, current_file || activeFile);
+  if (bulk_block !== undefined && toggleBulkCap.checked) {
+    updateBulkBadge(bulk_block);
+  }
+});
+
+socket.on('result', ({ text, lang, ai_used, syntax_ok, syntax_err, file }) => {
+  if (text) {
+    // Final result is Claude-corrected — show as plain white text (fully trusted)
+    // Hide heatmap legend since this is the corrected output
+    showPlainText(text);
+    hmLegend.classList.remove('show');
+    hmTitle.style.display = 'none';
+    preview.style.borderRadius = '10px';
+  }
+  if (lang && lang !== 'unknown') {
+    langBadge.textContent = lang;
+    langBadge.classList.add('active');
+  }
+  if (syntax_err) {
+    syntaxBanner.textContent = '\u26A0 Syntax error: ' + syntax_err;
+    syntaxBanner.classList.add('show');
+  } else {
+    syntaxBanner.classList.remove('show');
+  }
+  if (file) updateFileDesc(file);
+});
+
+socket.on('quality', ({ score, label, glare, glare_pct, zoom, zoom_msg,
+                        frames, text, language, conf, heatmap }) => {
+  if (text) {
+    // Good frame — show heatmap if available, otherwise plain text
+    if (heatmap && heatmap.length > 0) {
+      showHeatmap(heatmap);
+      // Update border-radius so legend strip attaches seamlessly
+      preview.style.borderRadius = '10px 10px 0 0';
+    } else {
+      showPlainText(text);
+      preview.style.borderRadius = '10px';
+    }
+    updateQuality(score, label, frames, glare, glare_pct, zoom, zoom_msg, language);
+    updateAutoCapBar(frames || 0);
+    const confStr = (conf !== undefined) ? ' \u00B7 conf ' + Math.round(conf) + '%' : '';
+    setStatus('Frame ' + frames + ' captured (sharpness: ' + score + confStr + ')', 'live');
+  } else {
+    // Quality feedback only (blurry / glare frame)
+    updateQuality(score, label, frames || 0, glare, glare_pct || 0, zoom, zoom_msg, null);
+  }
+});
+
+socket.on('auto_captured', ({ msg, frames }) => {
+  setStatus(msg || ('Auto-captured ' + frames + ' frames \u2013 processing\u2026'), 'live');
+  stopCapture();
+});
+
+socket.on('files', ({ files, current_file }) => {
+  updateFileDesc(current_file);
+  renderFileList(files, current_file);
+});
+
+// ---------------------------------------------------------------------------
+// Settings listeners
+// ---------------------------------------------------------------------------
+toggleNight.addEventListener('change', () => applyNightMode(toggleNight.checked));
+
+toggleAI.addEventListener('change', () => {
+  socket.emit('set_ai', { enabled: toggleAI.checked });
+  modelRow.style.display = toggleAI.checked ? '' : 'none';
+});
+
+toggleAutoCap.addEventListener('change', () => {
+  socket.emit('set_auto', { enabled: toggleAutoCap.checked });
+});
+
+toggleAutoClear.addEventListener('change', () => {
+  socket.emit('set_auto_clear', { enabled: toggleAutoClear.checked });
+});
+
+toggleBulkCap.addEventListener('change', () => {
+  socket.emit('set_bulk', { enabled: toggleBulkCap.checked });
+  if (toggleBulkCap.checked) {
+    bulkSessionBadge.style.display = '';
+    btnBulkReset.style.display = '';
+    updateBulkBadge(0);
+  } else {
+    bulkSessionBadge.style.display = 'none';
+    btnBulkReset.style.display = 'none';
+    bulkSessionBlocks = 0;
+    sessionResultBanner.classList.remove('show', 'error');
+    updateBulkExportVisibility();
+  }
+});
+
+btnBulkReset.addEventListener('click', () => {
+  socket.emit('reset_bulk_session');
+  sessionResultBanner.classList.remove('show', 'error');
+});
+
+// ---------------------------------------------------------------------------
+// Export Session modal
+// ---------------------------------------------------------------------------
+const exportModalBackdrop = document.getElementById('export-modal-backdrop');
+const exportFilenameInput = document.getElementById('export-filename-input');
+const exportAiFix         = document.getElementById('export-ai-fix');
+const exportModelRow      = document.getElementById('export-model-row');
+const exportModelBtns     = document.querySelectorAll('.export-model-btn');
+const btnModalCancel      = document.getElementById('btn-modal-cancel');
+const btnModalExport      = document.getElementById('btn-modal-export');
+
+let _exportModel = 'haiku';   // tracks which model is active in the modal
+
+const _EXT_MAP_JS = {
+  python:'py', javascript:'js', typescript:'ts', html:'html', css:'css',
+  react:'tsx', nextjs:'tsx', nestjs:'ts', java:'java', cpp:'cpp',
+  go:'go', rust:'rs', swift:'swift', kotlin:'kt', ruby:'rb', php:'php', sql:'sql'
+};
+
+function _suggestedFilename() {
+  const now = new Date();
+  const p   = n => String(n).padStart(2, '0');
+  const ts  = now.getFullYear() + p(now.getMonth()+1) + p(now.getDate()) +
+              '_' + p(now.getHours()) + p(now.getMinutes()) + p(now.getSeconds());
+  const lang = langSelect.value || 'code';
+  const ext  = _EXT_MAP_JS[lang] || 'txt';
+  return `${ts}_${lang}_session${bulkSessionNumber}.${ext}`;
+}
+
+function _setExportModel(m) {
+  _exportModel = m;
+  exportModelBtns.forEach(b => b.classList.toggle('active', b.dataset.model === m));
+}
+
+function showExportModal() {
+  exportFilenameInput.value = _suggestedFilename();
+  // Reset to defaults every time the modal opens
+  exportAiFix.checked = true;
+  exportModelRow.classList.remove('hidden');
+  _setExportModel('haiku');
+  exportModalBackdrop.classList.add('show');
+  requestAnimationFrame(() => exportFilenameInput.select());
+}
+
+function hideExportModal() {
+  exportModalBackdrop.classList.remove('show');
+}
+
+// Show/hide model row based on AI Fix toggle
+exportAiFix.addEventListener('change', () => {
+  exportModelRow.classList.toggle('hidden', !exportAiFix.checked);
+});
+
+// Model button clicks (scoped to modal — not synced with global model state)
+exportModelBtns.forEach(btn => {
+  btn.addEventListener('click', () => _setExportModel(btn.dataset.model));
+});
+
+btnFixExport.addEventListener('click', () => {
+  sessionResultBanner.classList.remove('show', 'error');
+  showExportModal();
+});
+
+btnModalCancel.addEventListener('click', hideExportModal);
+
+exportModalBackdrop.addEventListener('click', e => {
+  if (e.target === exportModalBackdrop) hideExportModal();
+});
+
+exportFilenameInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') btnModalExport.click();
+  if (e.key === 'Escape') hideExportModal();
+});
+
+btnModalExport.addEventListener('click', () => {
+  const chosen = exportFilenameInput.value.trim();
+  if (!chosen) return;
+  hideExportModal();
+  btnFixExport.disabled = true;
+  btnFixExport.textContent = 'Processing\u2026';
+  sessionResultBanner.classList.remove('show', 'error');
+  socket.emit('fix_session_file', {
+    filename: chosen,
+    ai_fix:   exportAiFix.checked,
+    model:    _exportModel,
+  });
+});
+
+socket.on('session_fixed', ({ text, lang, filename, blocks, session, error }) => {
+  btnFixExport.disabled = false;
+  btnFixExport.textContent = 'Export';
+  if (error) {
+    sessionResultBanner.classList.add('show', 'error');
+    sessionResultBanner.innerHTML =
+      '\u26A0 ' + escapeHtml(error);
+  } else {
+    sessionResultBanner.classList.remove('error');
+    sessionResultBanner.classList.add('show');
+    sessionResultBanner.innerHTML =
+      '\u2713 Session ' + session + ' exported \u2014 ' +
+      '<span class="export-filename">' + escapeHtml(filename) + '</span>' +
+      '<br><span style="color:var(--muted)">' +
+      blocks + (blocks === 1 ? ' block' : ' blocks') +
+      ' \u00B7 language: ' + escapeHtml(lang) +
+      '</span>';
+    if (text) {
+      showPlainText(text);
+      preview.style.borderRadius = '10px';
+      hmLegend.classList.remove('show');
+      hmTitle.style.display = 'none';
+    }
+  }
+});
+
+btnRoiClear.addEventListener('click', () => {
+  roi = null;
+  renderROI();
+  updateRoiBadge();
+});
+
+langSelect.addEventListener('change', () => {
+  const lang = langSelect.value;
+  socket.emit('set_language', { language: lang });
+  langBadge.textContent = lang ? lang : '—';
+});
+
+// ---------------------------------------------------------------------------
+// Main button listeners
+// ---------------------------------------------------------------------------
+btnStart.addEventListener('click', startCapture);
+btnStop.addEventListener('click', stopCapture);
+
+// ---------------------------------------------------------------------------
+// Photo mode — opens native camera, sends single full-res JPEG to server
+// ---------------------------------------------------------------------------
+btnPhoto.addEventListener('click', () => {
+  photoInput.value = '';   // reset so same file can be re-selected
+  photoInput.click();
+});
+
+photoInput.addEventListener('change', () => {
+  const file = photoInput.files[0];
+  if (!file) return;
+
+  btnPhoto.disabled = true;
+  setStatus('Processing photo…', 'live');
+  hmLegend.classList.remove('show');
+  hmTitle.style.display = 'none';
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const dataUrl = e.target.result;  // "data:image/jpeg;base64,..."
+    socket.emit('photo', { image: dataUrl });
+  };
+  reader.readAsDataURL(file);
+});
+
+// Re-enable photo button when server sends result/status
+socket.on('result', (data) => {
+  btnPhoto.disabled = !(_cameraReady && _socketReady);
+});
+
+btnClear.addEventListener('click', () => {
+  if (confirm('Clear ' + activeFile + ' on the server?')) {
+    socket.emit('clear_file');
+    syntaxBanner.classList.remove('show');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Resize / orientation
+// ---------------------------------------------------------------------------
+window.addEventListener('resize', renderROI);
+window.addEventListener('orientationchange', () => setTimeout(renderROI, 300));
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+initCamera();
+</script>
+
+<!-- Export session modal -->
+<div id="export-modal-backdrop">
+  <div id="export-modal">
+    <h3>Export Session</h3>
+    <p>Set filename and fix options</p>
+
+    <input id="export-filename-input" type="text" spellcheck="false"
+           placeholder="e.g. homeapi.py" autocomplete="off" autocorrect="off">
+
+    <!-- AI Fix toggle -->
+    <div class="export-opt-row">
+      <div>
+        <div class="export-opt-title">AI Fix</div>
+        <div class="export-opt-desc">Claude corrects OCR errors before saving</div>
+      </div>
+      <label class="ios-toggle">
+        <input type="checkbox" id="export-ai-fix" checked>
+        <span class="track"><span class="thumb"></span></span>
+      </label>
+    </div>
+
+    <!-- Model selector (visible only when AI Fix is on) -->
+    <div class="export-opt-row" id="export-model-row">
+      <div>
+        <div class="export-opt-title">Model</div>
+        <div class="export-opt-desc">Haiku = fast &amp; cheap &nbsp;&middot;&nbsp; Sonnet = best quality</div>
+      </div>
+      <div class="model-toggle-group">
+        <button class="export-model-btn active" data-model="haiku">Haiku</button>
+        <button class="export-model-btn" data-model="sonnet">Sonnet</button>
+      </div>
+    </div>
+
+    <div class="export-modal-btns">
+      <button id="btn-modal-cancel">Cancel</button>
+      <button id="btn-modal-export">Export</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
