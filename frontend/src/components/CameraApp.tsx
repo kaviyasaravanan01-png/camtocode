@@ -117,7 +117,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         else { addLog('frame ' + d.frames + ' ' + d.label + ' ' + d.score.toFixed(0)) }
       })
       sock.on('result', (d: ResultData) => {
-        setFinalText(d.text); setLiveText('')
+        // Append to existing output so multiple scans accumulate
+        setFinalText(prev => prev ? prev + '\n\n' + d.text : d.text)
+        setLiveText('')
         setLastLang(d.lang); setAiUsed(d.ai_used)
         setSyntaxOk(d.syntax_ok); setSyntaxErr(d.syntax_err || '')
         if (d.download_url) setLastDownload(d.download_url)
@@ -132,7 +134,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       sock.on('session_fixed', (d: SessionFixedData) => {
         setExporting(false); setShowExport(false)
         if (d.error) { setStatusMsg('Export error: ' + d.error); return }
-        if (d.text) setFinalText(d.text)
+        if (d.text) setFinalText(d.text)  // replace with AI-fixed version
         if (d.download_url) setLastDownload(d.download_url)
         setStatusMsg('Exported: ' + d.filename); addLog('exported: ' + d.filename)
       })
@@ -141,8 +143,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setSaveFilename(''); setPendingLang('')  // reset for next session
         if (d.error) { setStatusMsg('Save error: ' + d.error); addLog('save error: ' + d.error); return }
         if (d.download_url) setLastDownload(d.download_url)
-        if (d.text) setFinalText(d.text)
-        setStatusMsg('Saved: ' + d.filename); addLog('saved: ' + d.filename)
+        // Clear output after save — buffer is saved, start fresh
+        setFinalText(''); setLiveText('')
+        setStatusMsg('Saved: ' + d.filename + ' — output cleared for next session'); addLog('saved: ' + d.filename)
       })
       sock.on('language_set', (d: {language: string}) => setLanguage(d.language === 'auto' ? '' : d.language))
     }
@@ -383,7 +386,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             {capturing && liveText
               ? <><span style={{ color: '#22c55e' }}>⬤</span> Live OCR</>
               : finalText
-                ? <>Result {aiUsed && <span style={{ color: '#a78bfa', fontSize: '0.7rem' }}>✨ AI</span>}</>
+                ? <>
+                    {(() => {
+                      const blocks = finalText.split('\n\n').filter(b => b.trim()).length
+                      return blocks > 1 ? `${blocks} scans` : 'Result'
+                    })()}
+                    {aiUsed && <span style={{ color: '#a78bfa', fontSize: '0.7rem' }}>✨ AI</span>}
+                  </>
                 : 'Output'
             }
             {lastLang && <span style={s.langTag}>{lastLang}</span>}
