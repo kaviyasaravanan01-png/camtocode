@@ -1,15 +1,27 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase'
 
 export default function LoginPage() {
   const supabase = createClient()
+  const router = useRouter()
   const [email, setEmail]     = useState('')
   const [password, setPassword] = useState('')
   const [mode, setMode]       = useState<'login' | 'signup'>('login')
   const [loading, setLoading] = useState(false)
   const [msg, setMsg]         = useState('')
   const [error, setError]     = useState('')
+
+  useEffect(() => {
+    const handleAuthCallback = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (session) {
+        router.push('/app')
+      }
+    }
+    handleAuthCallback()
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -36,10 +48,11 @@ export default function LoginPage() {
   }
 
   const handleGoogleLogin = async () => {
-    await supabase.auth.signInWithOAuth({
+    const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: `${window.location.origin}/app` },
+      options: { redirectTo: `${window.location.origin}/` },
     })
+    if (error) setError(error.message)
   }
 
   return (
