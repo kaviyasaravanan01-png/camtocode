@@ -5,6 +5,13 @@ import { createClient } from '@/lib/supabase'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
+const _LANG_EXT: Record<string, string> = {
+  python: '.py', javascript: '.js', typescript: '.ts', react: '.tsx',
+  nestjs: '.ts', nextjs: '.tsx', java: '.java', cpp: '.cpp', go: '.go',
+  rust: '.rs', swift: '.swift', kotlin: '.kt', ruby: '.rb', php: '.php',
+  sql: '.sql', css: '.css', html: '.html',
+}
+
 const LANGUAGES = [
   '', 'python', 'javascript', 'typescript', 'react', 'nestjs', 'nextjs',
   'java', 'cpp', 'go', 'rust', 'swift', 'kotlin', 'ruby', 'php', 'sql', 'css', 'html',
@@ -66,6 +73,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [exportModel,  setExportModel]  = useState('haiku')
   const [exporting,    setExporting]    = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showSaveModal, setShowSaveModal] = useState(false)
+  const [saveFilename,  setSaveFilename]  = useState('')
+  const [saveAiEnabled, setSaveAiEnabled] = useState(true)
+  const [saveModel,     setSaveModel]     = useState('haiku')
+  const [saving,        setSaving]        = useState(false)
+  const [pendingText,   setPendingText]   = useState('')
+  const [pendingLang,   setPendingLang]   = useState('')
 
   const addLog = useCallback((msg: string) => {
     const ts = new Date().toLocaleTimeString()
@@ -108,6 +122,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setSyntaxOk(d.syntax_ok); setSyntaxErr(d.syntax_err || '')
         if (d.download_url) setLastDownload(d.download_url)
         addLog('result: ' + d.lang + ' ai=' + d.ai_used)
+        // Show save modal
+        const ext = _LANG_EXT[d.lang] || '.txt'
+        const ts = new Date().toISOString().slice(0,10).replace(/-/g,'')
+        setSaveFilename(`${d.lang || 'code'}_${ts}${ext}`)
+        setPendingText(d.text)
+        setPendingLang(d.lang)
+        setShowSaveModal(true)
       })
       sock.on('auto_captured', () => { addLog('auto_captured'); handleStopRef.current?.() })
       sock.on('session_fixed', (d: SessionFixedData) => {
@@ -116,6 +137,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         if (d.text) setFinalText(d.text)
         if (d.download_url) setLastDownload(d.download_url)
         setStatusMsg('Exported: ' + d.filename); addLog('exported: ' + d.filename)
+      })
+      sock.on('result_saved', (d: any) => {
+        setSaving(false); setShowSaveModal(false)
+        if (d.error) { setStatusMsg('Save error: ' + d.error); addLog('save error: ' + d.error); return }
+        if (d.download_url) setLastDownload(d.download_url)
+        if (d.text) setFinalText(d.text)
+        setStatusMsg('Saved: ' + d.filename); addLog('saved: ' + d.filename)
       })
       sock.on('language_set', (d: {language: string}) => setLanguage(d.language === 'auto' ? '' : d.language))
     }
@@ -200,6 +228,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const handleResetBulk       = () => { emit('reset_bulk_session'); setBulkBlocks(0) }
 
   const handleCopy = (text: string) => navigator.clipboard.writeText(text).then(() => setStatusMsg('Copied!'))
+  const handleSaveSubmit = (withAi: boolean) => {
+    setSaving(true)
+    emit('save_result', { text: pendingText, lang: pendingLang, filename: saveFilename, ai_fix: withAi, model: saveModel })
+  }
   const handleExportSubmit = () => { setExporting(true); emit('fix_session_file', { filename: exportFilename, ai_fix: true, model: exportModel }) }
   const handleSignOut = async () => { await supabase.auth.signOut(); window.location.href = '/' }
 
@@ -262,7 +294,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               <span>{label}</span>
               <label style={s.toggle}>
                 <input type="checkbox" checked={val} onChange={fn} style={s.toggleInput} />
-                <span style={{ ...s.toggleSlider, background: val ? '#4f46e5' : '#374151' }} />
+                <span style={{ ...s.toggleSlider, background: val ? '#4f46e5' : '#374151' }}>
+                  <span style={{ ...s.toggleKnob, left: val ? 22 : 3 }} />
+                </span>
               </label>
             </div>
           ))}
@@ -372,6 +406,49 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </pre>
       </div>
 
+      {/* Save Result Modal — shown after every scan */}
+      {showSaveModal && (
+        <div style={s.backdrop} onClick={() => !saving && setShowSaveModal(false)}>
+          <div style={s.modal} onClick={e => e.stopPropagation()}>
+            <h3 style={{ marginBottom: '0.5rem', fontSize: '1rem' }}>Save Result</h3>
+            <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.78rem', marginBottom: '1rem' }}>
+              {pendingLang} · {pendingText.split('\n').length} lines
+            </p>
+            <input
+              type="text"
+              placeholder="Filename"
+              value={saveFilename}
+              onChange={e => setSaveFilename(e.target.value)}
+              style={{ ...s.input, width: '100%', marginBottom: '0.75rem', boxSizing: 'border-box' }}
+            />
+            <div style={s.row}>
+              <span style={{ fontSize: '0.85rem' }}>AI Fix with Claude</span>
+              <label style={s.toggle}>
+                <input type="checkbox" checked={saveAiEnabled} onChange={() => setSaveAiEnabled(v => !v)} style={s.toggleInput} />
+                <span style={{ ...s.toggleSlider, background: saveAiEnabled ? '#4f46e5' : '#374151' }}>
+                  <span style={{ ...s.toggleKnob, left: saveAiEnabled ? 22 : 3 }} />
+                </span>
+              </label>
+            </div>
+            {saveAiEnabled && (
+              <div style={{ ...s.row, marginTop: 8 }}>
+                <span style={{ fontSize: '0.85rem' }}>Model</span>
+                <select value={saveModel} onChange={e => setSaveModel(e.target.value)} style={s.select}>
+                  <option value="haiku">Haiku (Fast)</option>
+                  <option value="sonnet">Sonnet (Best)</option>
+                </select>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 8, marginTop: '1rem' }}>
+              <button onClick={() => setShowSaveModal(false)} style={s.cancelBtn} disabled={saving}>Skip</button>
+              <button onClick={() => handleSaveSubmit(saveAiEnabled)} style={s.exportBtn} disabled={saving}>
+                {saving ? 'Saving...' : 'Save to History'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Export Modal */}
       {showExport && (
         <div style={s.backdrop} onClick={() => !exporting && setShowExport(false)}>
@@ -417,7 +494,8 @@ const s: Record<string, React.CSSProperties> = {
   select:       { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#e2e8f0', padding: '0.3rem 0.5rem', fontSize: '0.8rem' },
   toggle:       { position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' },
   toggleInput:  { position: 'absolute', opacity: 0, width: 0, height: 0 },
-  toggleSlider: { position: 'absolute', inset: 0, borderRadius: 12, transition: '0.3s' },
+  toggleSlider: { position: 'absolute', inset: 0, borderRadius: 12, transition: 'background 0.3s' },
+  toggleKnob:   { position: 'absolute', top: 3, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 0.3s', boxShadow: '0 1px 3px rgba(0,0,0,0.4)' },
   toolbar:      { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.35rem 0.75rem', background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.05)' },
   toolBtn:      { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', borderRadius: 8, padding: '0.25rem 0.7rem', fontSize: '0.75rem', cursor: 'pointer' },
   modeTag:      { background: 'rgba(99,102,241,0.25)', color: '#818cf8', borderRadius: 6, padding: '2px 8px', fontSize: '0.72rem' },

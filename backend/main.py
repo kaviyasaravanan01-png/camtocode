@@ -1758,6 +1758,75 @@ def on_fix_session_file(data=None):
     })
 
 
+@socketio.on("save_result")
+def on_save_result(data=None):
+    """Save a single scan result to Supabase Storage exports folder."""
+    sess = get_session(request.sid)
+    _d = data or {}
+
+    text = str(_d.get("text", "")).strip()
+    if not text:
+        text = sess.last_saved.strip()
+    if not text:
+        emit("result_saved", {"error": "No content to save"})
+        return
+
+    use_ai    = bool(_d.get("ai_fix", False))
+    use_model = str(_d.get("model", sess.llm_model_key)).strip().lower()
+    if use_model not in ("haiku", "sonnet"):
+        use_model = sess.llm_model_key
+
+    lang = str(_d.get("lang", "")).strip()
+    if not lang or lang == "unknown":
+        lang = detect_language(text)
+    if not lang or lang == "unknown":
+        lang = "text"
+
+    corrected = text
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if use_ai and HAS_ANTHROPIC and api_key:
+        emit("status", {"capturing": False, "msg": f"Fixing with Claude {use_model.capitalize()}..."})
+        try:
+            fixed = llm_fix_full_file(text, lang, model_key=use_model, session=sess)
+            if fixed and fixed.strip():
+                corrected = fixed
+        except Exception as e:
+            emit("status", {"capturing": False, "msg": f"Fix warning: {e} — saving raw OCR"})
+
+    user_filename = str(_d.get("filename", "")).strip()
+    if user_filename:
+        user_filename = os.path.basename(user_filename)
+        user_filename = re.sub(r"[^\w\-. ()]+", "_", user_filename).strip("_. ")
+    if user_filename:
+        new_name = user_filename
+    else:
+        ext     = _EXT_MAP.get(lang, ".txt")
+        now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+        new_name = f"{now_str}_{lang}{ext}"
+
+    download_url = ""
+    if sess.user_id and SUPABASE_URL:
+        export_path = _sb_export_path(sess.user_id, new_name)
+        supabase_write_text(export_path, corrected)
+        download_url = supabase_signed_url(export_path, expires_in=86400)
+        supabase_log_capture(sess.user_id, new_name, lang, 1)
+    else:
+        try:
+            with open(new_name, "w", encoding="utf-8") as f:
+                f.write(corrected)
+        except Exception as e:
+            emit("result_saved", {"error": f"Save failed: {e}"})
+            return
+
+    emit("result_saved", {
+        "text":         corrected,
+        "lang":         lang,
+        "filename":     new_name,
+        "download_url": download_url,
+    })
+    emit("status", {"capturing": False, "msg": f"Saved as {new_name}"})
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
