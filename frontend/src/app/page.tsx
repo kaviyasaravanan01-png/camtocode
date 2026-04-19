@@ -14,14 +14,15 @@ export default function LoginPage() {
   const [error, setError]     = useState('')
 
   useEffect(() => {
-    const handleAuthCallback = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (session) {
-        router.push('/app')
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        if (session) {
+          router.push('/app')
+        }
       }
-    }
-    handleAuthCallback()
-  }, [])
+    )
+    return () => subscription?.unsubscribe()
+  }, [router, supabase.auth])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
