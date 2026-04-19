@@ -1,13 +1,13 @@
 'use client'
-import { createClient as createSupabaseClient, SupabaseClient } from '@supabase/supabase-js'
+import { createBrowserClient } from '@supabase/ssr'
 
 const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-let client: SupabaseClient | null = null
+let client: ReturnType<typeof createBrowserClient> | null = null
 
-/** Browser client — singleton to avoid multiple GoTrueClient instances */
+/** Browser client — stores session in cookies so server can read it */
 export function createClient() {
-  if (!client) client = createSupabaseClient(supabaseUrl, supabaseAnon)
+  if (!client) client = createBrowserClient(supabaseUrl, supabaseAnon)
   return client
 }
