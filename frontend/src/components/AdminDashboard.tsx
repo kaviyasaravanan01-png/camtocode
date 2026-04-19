@@ -9,6 +9,7 @@ interface UserRow {
   email: string
   created_at: string
   plan: string
+  plan_expires_at: string | null
   scans_today: number
   ai_scans_today: number
   scans_month: number
@@ -149,6 +150,17 @@ export default function AdminDashboard({ userEmail }: { userEmail: string }) {
                   <span title="AI fixes this month">🤖 {u.ai_fixes_month}</span>
                   <span title="Files saved">📁 {u.files_saved}</span>
                   <span title="Haiku+Sonnet fix tokens">🧠 {fmt(u.haiku_fix_tok + u.sonnet_fix_tok)}</span>
+                  {u.plan_expires_at && u.plan !== 'admin' && (() => {
+                    const days = Math.ceil((new Date(u.plan_expires_at).getTime() - Date.now()) / 86_400_000)
+                    return (
+                      <span
+                        title="Plan expiry"
+                        style={{ color: days <= 3 ? '#f87171' : days <= 7 ? '#fb923c' : 'rgba(255,255,255,0.5)' }}
+                      >
+                        ⏳ {days <= 0 ? 'EXPIRED' : `${days}d`}
+                      </span>
+                    )
+                  })()}
                 </div>
                 {/* Plan change */}
                 <div style={s.planSelect} onClick={e => e.stopPropagation()}>
@@ -176,6 +188,11 @@ export default function AdminDashboard({ userEmail }: { userEmail: string }) {
                 <span style={{ ...s.planChip, background: PLAN_COLOR[selectedUser.plan], marginLeft: 8 }}>
                   {selectedUser.plan}
                 </span>
+                {selectedUser.plan_expires_at && selectedUser.plan !== 'admin' && (
+                  <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginLeft: 8, fontWeight: 400 }}>
+                    expires {new Date(selectedUser.plan_expires_at).toLocaleDateString()}
+                  </span>
+                )}
               </h2>
               {/* Usage summary */}
               <div style={s.usageSummary}>

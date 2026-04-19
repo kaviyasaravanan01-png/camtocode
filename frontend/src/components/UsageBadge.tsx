@@ -20,6 +20,8 @@ export interface PlanUsage {
   save_allowed: boolean
   ai_fix_allowed: boolean
   price_usd: number
+  plan_started_at: string | null
+  plan_expires_at: string | null
 }
 
 const PLAN_COLORS: Record<string, string> = {

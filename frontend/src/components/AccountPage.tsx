@@ -22,6 +22,7 @@ const PLAN_FEATURES: Record<string, string[]> = {
 interface PlanData {
   plan: string
   plan_started_at: string | null
+  plan_expires_at: string | null
   price_usd: number
   scans_today: number
   ai_scans_today: number
@@ -40,6 +41,17 @@ interface PlanData {
   max_lines_scan: number
   save_allowed: boolean
   ai_fix_allowed: boolean
+}
+
+interface Payment {
+  id: string
+  plan: string
+  amount_paise: number
+  currency: string
+  razorpay_order_id: string
+  razorpay_payment_id: string
+  status: string
+  created_at: string
 }
 
 function Bar({ used, limit, color }: { used: number; limit: number; color: string }) {
@@ -87,29 +99,41 @@ function fmtTokens(n: number) {
 }
 
 export default function AccountPage({ userEmail }: { userEmail: string }) {
-  const [data,    setData]    = useState<PlanData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error,   setError]   = useState('')
+  const [data,     setData]     = useState<PlanData | null>(null)
+  const [payments, setPayments] = useState<Payment[]>([])
+  const [loading,  setLoading]  = useState(true)
+  const [error,    setError]    = useState('')
 
-  const fetchPlan = async () => {
+  const fetchAll = async () => {
     setLoading(true); setError('')
     const supabase = createClient()
     const { data: { session } } = await supabase.auth.getSession()
     const token = session?.access_token || ''
     try {
-      const res = await fetch(`${BACKEND_URL}/api/my_plan`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setData(await res.json())
+      const [planRes, payRes] = await Promise.all([
+        fetch(`${BACKEND_URL}/api/my_plan`,     { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${BACKEND_URL}/api/my_payments`, { headers: { Authorization: `Bearer ${token}` } }),
+      ])
+      if (!planRes.ok) throw new Error(`HTTP ${planRes.status}`)
+      setData(await planRes.json())
+      const pd = await payRes.json()
+      setPayments(pd.payments || [])
     } catch (e: any) { setError(e.message) }
     finally { setLoading(false) }
   }
 
-  useEffect(() => { fetchPlan() }, [])
+  useEffect(() => { fetchAll() }, [])
 
-  const plan  = data?.plan || 'free'
-  const color = PLAN_COLOR[plan] || '#64748b'
+  const plan    = data?.plan || 'free'
+  const color   = PLAN_COLOR[plan] || '#64748b'
+  const isAdmin = plan === 'admin'
+
+  // Days until expiry
+  const daysLeft = (() => {
+    if (!data?.plan_expires_at) return null
+    const diff = new Date(data.plan_expires_at).getTime() - Date.now()
+    return Math.max(0, Math.ceil(diff / 86_400_000))
+  })()
 
   return (
     <div style={s.root}>
@@ -118,12 +142,20 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <a href="/app" style={s.backLink}>← Back to App</a>
           <h1 style={s.title}>My Account</h1>
+          {isAdmin && (
+            <a href="/admin" style={{ ...s.backLink, color: '#f59e0b', marginLeft: 8, fontWeight: 700 }}>
+              🛡 Admin Dashboard →
+            </a>
+          )}
         </div>
-        <span style={s.emailChip}>{userEmail}</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={s.emailChip}>{userEmail}</span>
+          <button onClick={fetchAll} style={s.refreshBtn} disabled={loading}>{loading ? '…' : '↻'}</button>
+        </div>
       </div>
 
       {error && <p style={s.err}>Error: {error}</p>}
-      {loading && <p style={s.dim}>Loading your plan details…</p>}
+      {loading && <p style={{ ...s.dim, padding: '1.5rem' }}>Loading your plan details…</p>}
 
       {data && (
         <div style={s.body}>
@@ -148,8 +180,18 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
                       <p style={s.metaVal}>{fmtDate(data.plan_started_at)}</p>
                     </div>
                     <div>
-                      <p style={s.metaLabel}>Next billing ~</p>
-                      <p style={s.metaVal}>{nextBilling(data.plan_started_at)}</p>
+                      <p style={s.metaLabel}>Expires / renew by</p>
+                      <p style={{
+                        ...s.metaVal,
+                        color: daysLeft !== null && daysLeft <= 5 ? '#f87171' : '#f1f5f9',
+                      }}>
+                        {fmtDate(data.plan_expires_at)}
+                        {daysLeft !== null && (
+                          <span style={{ fontSize: '0.75rem', marginLeft: 8, color: daysLeft <= 5 ? '#f87171' : 'rgba(255,255,255,0.4)' }}>
+                            ({daysLeft === 0 ? 'expires today!' : `${daysLeft}d left`})
+                          </span>
+                        )}
+                      </p>
                     </div>
                   </div>
                 )}
@@ -272,6 +314,40 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
               {SUPPORT_EMAIL}
             </p>
           </section>
+
+          {/* ── Payment history ───────────────────────────────────────── */}
+          {payments.length > 0 && (
+            <section style={s.card}>
+              <h2 style={s.sectionTitle}>Payment History</h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                {payments.map(p => (
+                  <div key={p.id} style={s.payRow}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span style={{ ...s.planBadge, background: PLAN_COLOR[p.plan] || '#64748b' }}>
+                        {PLAN_LABEL[p.plan] || p.plan}
+                      </span>
+                      <div>
+                        <p style={{ margin: 0, fontWeight: 600, fontSize: '0.88rem', color: '#f1f5f9' }}>
+                          ₹{(p.amount_paise / 100).toFixed(0)} — {p.plan.charAt(0).toUpperCase() + p.plan.slice(1)} Plan
+                        </p>
+                        <p style={{ margin: 0, fontSize: '0.72rem', color: 'rgba(255,255,255,0.35)' }}>
+                          {new Date(p.created_at).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ ...s.statusChip, background: p.status === 'captured' ? 'rgba(34,197,94,0.15)' : 'rgba(248,113,113,0.15)', color: p.status === 'captured' ? '#4ade80' : '#f87171', border: `1px solid ${p.status === 'captured' ? 'rgba(34,197,94,0.3)' : 'rgba(248,113,113,0.3)'}` }}>
+                        {p.status}
+                      </span>
+                      <p style={{ margin: '4px 0 0', fontSize: '0.65rem', color: 'rgba(255,255,255,0.25)' }}>
+                        {p.razorpay_payment_id}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           {/* ── Quick links ───────────────────────────────────────────── */}
           <div style={s.quickLinks}>
@@ -400,5 +476,33 @@ const s: Record<string, React.CSSProperties> = {
     textDecoration: 'none',
     fontSize: '0.85rem',
     fontWeight: 500,
+  },
+  refreshBtn: {
+    background: 'rgba(255,255,255,0.08)',
+    border: '1px solid rgba(255,255,255,0.12)',
+    borderRadius: 6,
+    color: '#e2e8f0',
+    padding: '0.2rem 0.6rem',
+    cursor: 'pointer',
+    fontSize: '0.85rem',
+  },
+  payRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    background: 'rgba(255,255,255,0.04)',
+    border: '1px solid rgba(255,255,255,0.07)',
+    borderRadius: 10,
+    padding: '0.7rem 1rem',
+    flexWrap: 'wrap' as any,
+    gap: 8,
+  },
+  statusChip: {
+    display: 'inline-block',
+    borderRadius: 20,
+    padding: '2px 10px',
+    fontSize: '0.7rem',
+    fontWeight: 700,
+    textTransform: 'capitalize' as any,
   },
 }

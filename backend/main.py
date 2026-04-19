@@ -25,7 +25,7 @@ from collections import deque
 from io import BytesIO
 from collections import Counter
 from difflib import SequenceMatcher
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import cv2
 import numpy as np
@@ -252,6 +252,7 @@ class UserSession:
         self.usage_files_saved          = 0
         self.usage_loaded_at            = 0.0   # epoch when cache was last refreshed
         self.plan_started_at: str | None = None  # ISO timestamp when current plan started
+        self.plan_expires_at: str | None = None  # ISO timestamp when plan expires (None = never)
         # ── Rate limiting (in-memory, per session) ───────────────────────
         self.last_scan_completed_at     = 0.0
         self.scan_timestamps: list[float] = []  # rolling 60-second window
@@ -442,22 +443,23 @@ def _rest_hdr() -> dict:
         "Content-Type":  "application/json",
     }
 
-def db_get_plan(user_id: str) -> tuple[str, str | None]:
-    """Return (plan, plan_started_at_iso) for the user. Falls back to ('free', None)."""
+def db_get_plan(user_id: str) -> tuple[str, str | None, str | None]:
+    """Return (plan, plan_started_at, plan_expires_at). Falls back to ('free', None, None)."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return "free", None
+        return "free", None, None
     try:
         resp = httpx.get(
-            f"{SUPABASE_URL}/rest/v1/user_plans?user_id=eq.{user_id}&select=plan,plan_started_at",
+            f"{SUPABASE_URL}/rest/v1/user_plans?user_id=eq.{user_id}&select=plan,plan_started_at,plan_expires_at",
             headers=_rest_hdr(), timeout=5,
         )
         if resp.status_code == 200:
             rows = resp.json()
             if rows:
-                return rows[0].get("plan", "free"), rows[0].get("plan_started_at")
+                r = rows[0]
+                return r.get("plan", "free"), r.get("plan_started_at"), r.get("plan_expires_at")
     except Exception:
         pass
-    return "free", None
+    return "free", None, None
 
 def db_upsert_plan(user_id: str, plan: str, set_started_at: bool = False) -> None:
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
@@ -465,7 +467,12 @@ def db_upsert_plan(user_id: str, plan: str, set_started_at: bool = False) -> Non
     try:
         data: dict = {"user_id": user_id, "plan": plan}
         if set_started_at:
-            data["plan_started_at"] = datetime.now(timezone.utc).isoformat()
+            now_dt = datetime.now(timezone.utc)
+            data["plan_started_at"] = now_dt.isoformat()
+            if plan in ("starter", "pro"):
+                data["plan_expires_at"] = (now_dt + timedelta(days=30)).isoformat()
+            else:
+                data["plan_expires_at"] = None   # free / admin never expire
         httpx.post(
             f"{SUPABASE_URL}/rest/v1/user_plans",
             json=data,
@@ -475,9 +482,31 @@ def db_upsert_plan(user_id: str, plan: str, set_started_at: bool = False) -> Non
     except Exception:
         pass
 
-def db_get_daily(user_id: str, date_str: str) -> dict:
+def db_save_payment(user_id: str, user_email: str, plan: str,
+                    amount_paise: int, order_id: str, payment_id: str) -> None:
+    """Persist a successful payment to the payment_history table."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return {}
+        return
+    try:
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/payment_history",
+            json={
+                "user_id":             user_id,
+                "user_email":          user_email,
+                "plan":                plan,
+                "amount_paise":        amount_paise,
+                "currency":            "INR",
+                "razorpay_order_id":   order_id,
+                "razorpay_payment_id": payment_id,
+                "status":              "captured",
+            },
+            headers={**_rest_hdr(), "Prefer": "return=minimal"},
+            timeout=5,
+        )
+    except Exception as e:
+        print(f"[payment_history] save failed: {e}", flush=True)
+
+def db_get_daily(user_id: str, date_str: str) -> dict:
     try:
         resp = httpx.get(
             f"{SUPABASE_URL}/rest/v1/daily_usage?user_id=eq.{user_id}&date=eq.{date_str}&select=*",
@@ -567,8 +596,22 @@ def load_user_plan_usage(sess: "UserSession") -> None:
         sess.plan = "admin"
         db_upsert_plan(sess.user_id, "admin")
         sess.plan_started_at = None
+        sess.plan_expires_at = None
     else:
-        sess.plan, sess.plan_started_at = db_get_plan(sess.user_id)
+        plan, started_at, expires_at = db_get_plan(sess.user_id)
+        # Check expiry — auto-downgrade to free if subscription lapsed
+        if expires_at and plan not in ("free", "admin"):
+            try:
+                exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if exp_dt < datetime.now(timezone.utc):
+                    print(f"[plan] expired for {sess.user_email} — downgrading to free", flush=True)
+                    db_upsert_plan(sess.user_id, "free")
+                    plan, started_at, expires_at = "free", None, None
+            except Exception:
+                pass
+        sess.plan          = plan
+        sess.plan_started_at = started_at
+        sess.plan_expires_at = expires_at
     sess.plan_limits = PLANS.get(sess.plan, PLANS["free"])
 
     today    = datetime.now().strftime("%Y-%m-%d")
@@ -720,6 +763,7 @@ def plan_usage_payload(sess: "UserSession") -> dict:
         "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
         "price_usd":         lim.get("price_usd", 0),
         "plan_started_at":   sess.plan_started_at,
+        "plan_expires_at":   sess.plan_expires_at,
     }
 
 # ---------------------------------------------------------------------------
@@ -2532,10 +2576,19 @@ def verify_payment():
         return jsonify({"error": "Invalid payment signature"}), 400
 
     # Upgrade plan in Supabase
-    user_id = payload.get("sub", "")
+    user_id    = payload.get("sub", "")
+    user_email = payload.get("email", "")
     db_upsert_plan(user_id, plan, set_started_at=True)
+    db_save_payment(
+        user_id    = user_id,
+        user_email = user_email,
+        plan       = plan,
+        amount_paise = PLAN_PRICES_INR.get(plan, 0),
+        order_id   = order_id,
+        payment_id = payment_id,
+    )
 
-    print(f"[payment] user={payload.get('email')} upgraded to {plan} "
+    print(f"[payment] user={user_email} upgraded to {plan} "
           f"order={order_id} payment={payment_id}", flush=True)
 
     return jsonify({"ok": True, "plan": plan})
@@ -2560,11 +2613,23 @@ def razorpay_webhook():
 
     event = request.get_json(force=True) or {}
     if event.get("event") == "payment.captured":
-        notes   = event.get("payload", {}).get("payment", {}).get("entity", {}).get("notes", {})
+        entity  = event.get("payload", {}).get("payment", {}).get("entity", {})
+        notes   = entity.get("notes", {})
         user_id = notes.get("user_id", "")
         plan    = notes.get("plan", "")
+        pay_id  = entity.get("id", "")
+        ord_id  = entity.get("order_id", "")
+        amount  = entity.get("amount", PLAN_PRICES_INR.get(plan, 0))
         if user_id and plan in PLAN_PRICES_INR:
             db_upsert_plan(user_id, plan, set_started_at=True)
+            db_save_payment(
+                user_id    = user_id,
+                user_email = notes.get("user_email", ""),
+                plan       = plan,
+                amount_paise = amount,
+                order_id   = ord_id,
+                payment_id = pay_id,
+            )
             print(f"[webhook] plan upgraded user={user_id} plan={plan}", flush=True)
 
     return jsonify({"ok": True})
@@ -2586,8 +2651,18 @@ def my_plan():
     if email in ADMIN_EMAILS:
         plan         = "admin"
         started_at   = None
+        expires_at   = None
     else:
-        plan, started_at = db_get_plan(user_id)
+        plan, started_at, expires_at = db_get_plan(user_id)
+        # Auto-downgrade if expired
+        if expires_at and plan not in ("free", "admin"):
+            try:
+                exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+                if exp_dt < datetime.now(timezone.utc):
+                    db_upsert_plan(user_id, "free")
+                    plan, started_at, expires_at = "free", None, None
+            except Exception:
+                pass
 
     lim   = PLANS.get(plan, PLANS["free"])
     today = datetime.now().strftime("%Y-%m-%d")
@@ -2598,6 +2673,7 @@ def my_plan():
     return jsonify({
         "plan":              plan,
         "plan_started_at":   started_at,
+        "plan_expires_at":   expires_at,
         "price_usd":         lim.get("price_usd", 0),
         # daily
         "scans_today":       daily.get("scans", 0),
@@ -2620,6 +2696,27 @@ def my_plan():
         "save_allowed":      lim.get("save_allowed", True),
         "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
     })
+
+
+@app.route("/api/my_payments")
+def my_payments():
+    """Return authenticated user's payment history (newest first)."""
+    payload, err = _require_auth(request)
+    if err:
+        return jsonify({"error": err}), 401
+    user_id = payload.get("sub", "")
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return jsonify({"payments": []})
+    try:
+        resp = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/payment_history"
+            f"?user_id=eq.{user_id}&order=created_at.desc&select=*",
+            headers=_rest_hdr(), timeout=5,
+        )
+        rows = resp.json() if resp.status_code == 200 else []
+        return jsonify({"payments": rows})
+    except Exception as e:
+        return jsonify({"payments": [], "error": str(e)})
 
 
 @app.route("/api/admin/users")
@@ -2647,9 +2744,20 @@ def admin_list_users():
     for u in users:
         uid   = u.get("id", "")
         email = u.get("email", "")
-        plan  = db_get_plan(uid) if uid else "free"
+        plan_info = db_get_plan(uid) if uid else ("free", None, None)
+        plan      = plan_info[0]
+        expires_at = plan_info[2]
         if email in ADMIN_EMAILS:
-            plan = "admin"
+            plan       = "admin"
+            expires_at = None
+        # Auto-downgrade if expired
+        if expires_at and plan not in ("free", "admin"):
+            try:
+                if datetime.fromisoformat(expires_at.replace("Z", "+00:00")) < datetime.now(timezone.utc):
+                    db_upsert_plan(uid, "free")
+                    plan, expires_at = "free", None
+            except Exception:
+                pass
         daily   = db_get_daily(uid, today)   if uid else {}
         monthly = db_get_monthly(uid, month) if uid else {}
         result.append({
@@ -2657,6 +2765,7 @@ def admin_list_users():
             "email":         email,
             "created_at":    u.get("created_at", ""),
             "plan":          plan,
+            "plan_expires_at": expires_at,
             "scans_today":   daily.get("scans", 0),
             "ai_scans_today":daily.get("ai_scans", 0),
             "scans_month":   monthly.get("scans", 0),
