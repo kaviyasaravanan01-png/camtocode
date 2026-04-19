@@ -586,7 +586,8 @@ def check_js_syntax(code: str) -> tuple[bool, str | None]:
         raw = result.stderr.strip() or "JS syntax error"
         m = re.search(r'\(line\s+(\d+)\)', raw, re.IGNORECASE)
         if m:
-            msg = f"Line {m.group(1)}: {raw[:m.start()].strip(' .\n')}"
+            prefix = raw[:m.start()].strip(' .\n')
+            msg = f"Line {m.group(1)}: {prefix}"
         else:
             msg = next((ln.strip() for ln in raw.splitlines()
                         if ln.strip() and not ln.strip().startswith("at ")), raw)
