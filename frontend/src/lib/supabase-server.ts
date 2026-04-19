@@ -5,8 +5,8 @@ const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
 /** Server client — use in Server Components / Route Handlers only */
-export function createServerComponentClient() {
-  const cookieStore = cookies()
+export async function createServerComponentClient() {
+  const cookieStore = await cookies()
   return createServerClient(supabaseUrl, supabaseAnon, {
     cookies: {
       get(name: string) {
