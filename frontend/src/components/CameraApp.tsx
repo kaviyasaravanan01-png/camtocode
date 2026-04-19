@@ -616,6 +616,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
           <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug log">🪲</button>
           <a href="/history" style={s.historyLink}>History</a>
+          <a href="/account" style={s.historyLink}>Account</a>
           {planUsage?.plan === 'admin' && (
             <a href="/admin" style={{ ...s.historyLink, color: '#f59e0b' }}>Admin</a>
           )}

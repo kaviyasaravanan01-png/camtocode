@@ -174,6 +174,7 @@ function Nav() {
         <a href="#how-it-works" style={s.navLink}>How It Works</a>
         <a href="#pricing" style={s.navLink}>Pricing</a>
         <a href="#faq" style={s.navLink}>FAQ</a>
+        <a href="#help" style={s.navLink}>Help</a>
       </div>
       <div style={s.navActions}>
         <Link href="/login" style={s.signInBtn}>Sign In</Link>
@@ -356,6 +357,41 @@ export default function LandingPage() {
         </div>
       </section>
 
+      {/* ── Help & Support ────────────────────────────────────────────────── */}
+      <section style={s.section} id="help">
+        <div style={s.sectionInner}>
+          <p style={s.sectionTag}>We're Here to Help</p>
+          <h2 style={s.sectionTitle}>Help & Support</h2>
+          <p style={s.sectionSub}>
+            Questions about your plan, billing, or how the app works?
+            Send us an email — we typically respond within 24 hours.
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <a
+              href="mailto:anandanathurelangovan94@gmail.com?subject=CamToCode Support"
+              style={s.helpCardBtn}
+            >
+              ✉️ General Support
+            </a>
+            <a
+              href="mailto:anandanathurelangovan94@gmail.com?subject=CamToCode Plan Upgrade"
+              style={{ ...s.helpCardBtn, background: 'rgba(99,102,241,0.12)', borderColor: 'rgba(99,102,241,0.3)', color: '#818cf8' }}
+            >
+              💳 Plan / Billing
+            </a>
+            <a
+              href="mailto:anandanathurelangovan94@gmail.com?subject=CamToCode Bug Report"
+              style={{ ...s.helpCardBtn, background: 'rgba(248,113,113,0.08)', borderColor: 'rgba(248,113,113,0.25)', color: '#fca5a5' }}
+            >
+              🐛 Bug Report
+            </a>
+          </div>
+          <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '0.8rem', marginTop: 20 }}>
+            anandanathurelangovan94@gmail.com
+          </p>
+        </div>
+      </section>
+
       {/* ── CTA Banner ────────────────────────────────────────────────────── */}
       <section style={s.ctaBanner}>
         <div style={s.ctaBannerInner}>
@@ -391,8 +427,8 @@ export default function LandingPage() {
             </div>
             <div style={s.footerCol}>
               <span style={s.footerColTitle}>Support</span>
-              <a href="#faq" style={s.footerLink}>FAQ</a>
-              <a href="mailto:support@camtocode.com" style={s.footerLink}>Contact Us</a>
+              <a href="#help" style={s.footerLink}>FAQ</a>
+              <a href="mailto:anandanathurelangovan94@gmail.com" style={s.footerLink}>Contact Us</a>
             </div>
           </div>
         </div>
@@ -963,5 +999,16 @@ const s: Record<string, React.CSSProperties> = {
   footerCopy: {
     color: 'rgba(255,255,255,0.25)',
     fontSize: '0.78rem',
+  },
+  helpCardBtn: {
+    display:      'inline-block',
+    background:   'rgba(255,255,255,0.06)',
+    border:       '1px solid rgba(255,255,255,0.12)',
+    borderRadius: 10,
+    padding:      '0.65rem 1.4rem',
+    color:        'rgba(255,255,255,0.7)',
+    textDecoration: 'none',
+    fontSize:     '0.9rem',
+    fontWeight:   500,
   },
 }

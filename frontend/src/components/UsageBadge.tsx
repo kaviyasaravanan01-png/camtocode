@@ -138,6 +138,13 @@ export default function UsageBadge({ usage, compact = false }: { usage: PlanUsag
         {usage.max_lines_scan < 9999 && <span style={s.note}>✂ Top {usage.max_lines_scan} lines per scan</span>}
         {usage.sonnet_allowed && <span style={s.note}>✅ Sonnet for large files</span>}
       </div>
+
+      {/* Proactive upgrade link for non-pro users */}
+      {(plan === 'free' || plan === 'starter') && !compact && (
+        <a href="/account" style={s.upgradeLink}>
+          {plan === 'free' ? '⚡ Upgrade to Starter — $7/mo →' : '🚀 Upgrade to Pro — $18/mo →'}
+        </a>
+      )}
     </div>
   )
 }
@@ -178,4 +185,17 @@ const s: Record<string, React.CSSProperties> = {
   dim:   { color: 'rgba(255,255,255,0.4)', fontSize: '0.68rem' },
   notes: { marginTop: 6, display: 'flex', flexDirection: 'column', gap: 2 },
   note:  { color: 'rgba(255,255,255,0.4)', fontSize: '0.67rem' },
+  upgradeLink: {
+    display:     'block',
+    marginTop:   8,
+    padding:     '0.35rem 0.7rem',
+    background:  'rgba(99,102,241,0.15)',
+    border:      '1px solid rgba(99,102,241,0.3)',
+    borderRadius: 7,
+    color:       '#818cf8',
+    textDecoration: 'none',
+    fontSize:    '0.7rem',
+    fontWeight:  600,
+    textAlign:   'center',
+  },
 }

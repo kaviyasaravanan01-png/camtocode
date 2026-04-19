@@ -251,6 +251,7 @@ class UserSession:
         self.usage_month_ai_fixes       = 0
         self.usage_files_saved          = 0
         self.usage_loaded_at            = 0.0   # epoch when cache was last refreshed
+        self.plan_started_at: str | None = None  # ISO timestamp when current plan started
         # ── Rate limiting (in-memory, per session) ───────────────────────
         self.last_scan_completed_at     = 0.0
         self.scan_timestamps: list[float] = []  # rolling 60-second window
@@ -441,30 +442,33 @@ def _rest_hdr() -> dict:
         "Content-Type":  "application/json",
     }
 
-def db_get_plan(user_id: str) -> str:
-    """Return the user's plan string ('free','starter','pro','admin')."""
+def db_get_plan(user_id: str) -> tuple[str, str | None]:
+    """Return (plan, plan_started_at_iso) for the user. Falls back to ('free', None)."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-        return "free"
+        return "free", None
     try:
         resp = httpx.get(
-            f"{SUPABASE_URL}/rest/v1/user_plans?user_id=eq.{user_id}&select=plan",
+            f"{SUPABASE_URL}/rest/v1/user_plans?user_id=eq.{user_id}&select=plan,plan_started_at",
             headers=_rest_hdr(), timeout=5,
         )
         if resp.status_code == 200:
             rows = resp.json()
             if rows:
-                return rows[0].get("plan", "free")
+                return rows[0].get("plan", "free"), rows[0].get("plan_started_at")
     except Exception:
         pass
-    return "free"
+    return "free", None
 
-def db_upsert_plan(user_id: str, plan: str) -> None:
+def db_upsert_plan(user_id: str, plan: str, set_started_at: bool = False) -> None:
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         return
     try:
+        data: dict = {"user_id": user_id, "plan": plan}
+        if set_started_at:
+            data["plan_started_at"] = datetime.now(timezone.utc).isoformat()
         httpx.post(
             f"{SUPABASE_URL}/rest/v1/user_plans",
-            json={"user_id": user_id, "plan": plan},
+            json=data,
             headers={**_rest_hdr(), "Prefer": "resolution=merge-duplicates"},
             timeout=5,
         )
@@ -562,8 +566,9 @@ def load_user_plan_usage(sess: "UserSession") -> None:
     if sess.user_email in ADMIN_EMAILS:
         sess.plan = "admin"
         db_upsert_plan(sess.user_id, "admin")
+        sess.plan_started_at = None
     else:
-        sess.plan = db_get_plan(sess.user_id)
+        sess.plan, sess.plan_started_at = db_get_plan(sess.user_id)
     sess.plan_limits = PLANS.get(sess.plan, PLANS["free"])
 
     today    = datetime.now().strftime("%Y-%m-%d")
@@ -714,6 +719,7 @@ def plan_usage_payload(sess: "UserSession") -> dict:
         "save_allowed":      lim.get("save_allowed", True),
         "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
         "price_usd":         lim.get("price_usd", 0),
+        "plan_started_at":   sess.plan_started_at,
     }
 
 # ---------------------------------------------------------------------------
@@ -2527,7 +2533,7 @@ def verify_payment():
 
     # Upgrade plan in Supabase
     user_id = payload.get("sub", "")
-    db_upsert_plan(user_id, plan)
+    db_upsert_plan(user_id, plan, set_started_at=True)
 
     print(f"[payment] user={payload.get('email')} upgraded to {plan} "
           f"order={order_id} payment={payment_id}", flush=True)
@@ -2558,10 +2564,62 @@ def razorpay_webhook():
         user_id = notes.get("user_id", "")
         plan    = notes.get("plan", "")
         if user_id and plan in PLAN_PRICES_INR:
-            db_upsert_plan(user_id, plan)
+            db_upsert_plan(user_id, plan, set_started_at=True)
             print(f"[webhook] plan upgraded user={user_id} plan={plan}", flush=True)
 
     return jsonify({"ok": True})
+
+
+@app.route("/api/my_plan")
+def my_plan():
+    """Return the authenticated user's full plan + usage snapshot.
+    Used by the /account dashboard page.
+    """
+    payload, err = _require_auth(request)
+    if err:
+        return jsonify({"error": err}), 401
+
+    user_id = payload.get("sub", "")
+    email   = payload.get("email", "")
+
+    # Determine plan
+    if email in ADMIN_EMAILS:
+        plan         = "admin"
+        started_at   = None
+    else:
+        plan, started_at = db_get_plan(user_id)
+
+    lim   = PLANS.get(plan, PLANS["free"])
+    today = datetime.now().strftime("%Y-%m-%d")
+    month = datetime.now().strftime("%Y-%m")
+    daily   = db_get_daily(user_id, today)
+    monthly = db_get_monthly(user_id, month)
+
+    return jsonify({
+        "plan":              plan,
+        "plan_started_at":   started_at,
+        "price_usd":         lim.get("price_usd", 0),
+        # daily
+        "scans_today":       daily.get("scans", 0),
+        "ai_scans_today":    daily.get("ai_scans", 0),
+        "scans_day_limit":   lim.get("scans_day", 0),
+        "ai_scans_day_limit":lim.get("ai_scans_day", 0),
+        # monthly
+        "scans_month":       monthly.get("scans", 0),
+        "scans_month_limit": lim.get("scans_month", 0),
+        "ai_fixes_month":    monthly.get("ai_fixes", 0),
+        "ai_fixes_limit":    lim.get("ai_fixes_month", 0),
+        "haiku_fix_tokens":  monthly.get("haiku_fix_tokens", 0),
+        "sonnet_fix_tokens": monthly.get("sonnet_fix_tokens", 0),
+        "fix_token_budget":  lim.get("fix_token_budget", 0),
+        "files_saved":       monthly.get("files_saved", 0),
+        "max_files":         lim.get("max_files", 0),
+        # features
+        "sonnet_allowed":    lim.get("sonnet_allowed", False),
+        "max_lines_scan":    lim.get("max_lines_scan", 0),
+        "save_allowed":      lim.get("save_allowed", True),
+        "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
+    })
 
 
 @app.route("/api/admin/users")
@@ -2642,7 +2700,7 @@ def admin_set_plan():
     plan    = body.get("plan", "")
     if not user_id or plan not in PLANS:
         return jsonify({"error": "user_id and valid plan required"}), 400
-    db_upsert_plan(user_id, plan)
+    db_upsert_plan(user_id, plan, set_started_at=True)
     return jsonify({"ok": True, "user_id": user_id, "plan": plan})
 
 
