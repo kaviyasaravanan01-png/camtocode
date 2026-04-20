@@ -4,6 +4,18 @@ import { createClient } from '@/lib/supabase'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
+function fixSignedUrl(url: string): string {
+  if (!url) return url
+  try {
+    const u = new URL(url)
+    if (u.pathname.startsWith('/object/sign/')) {
+      u.pathname = '/storage/v1' + u.pathname
+      return u.toString()
+    }
+  } catch { /* not a valid URL */ }
+  return url
+}
+
 interface UserRow {
   id: string
   email: string
@@ -232,7 +244,7 @@ export default function AdminDashboard({ userEmail }: { userEmail: string }) {
                     style={{ ...s.dlBtn, border: 'none', cursor: 'pointer' }}
                     onClick={async () => {
                       try {
-                        const res = await fetch(f.download_url)
+                        const res = await fetch(fixSignedUrl(f.download_url))
                         const blob = await res.blob()
                         const url = URL.createObjectURL(blob)
                         const a = document.createElement('a')

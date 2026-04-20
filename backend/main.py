@@ -351,8 +351,11 @@ def supabase_signed_url(path: str, expires_in: int = 3600) -> str:
         )
         if resp.status_code == 200:
             signed = resp.json().get("signedURL", "")
-            # signedURL is a relative path — prepend Supabase URL
             if signed:
+                # Supabase returns "/object/sign/..." but the correct URL
+                # needs "/storage/v1/object/sign/..."
+                if signed.startswith("/object/"):
+                    signed = "/storage/v1" + signed
                 return f"{SUPABASE_URL}{signed}" if signed.startswith("/") else signed
         return ""
     except Exception:

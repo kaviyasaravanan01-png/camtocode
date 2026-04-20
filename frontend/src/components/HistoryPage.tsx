@@ -4,6 +4,20 @@ import { createClient } from '@/lib/supabase'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
+// Supabase sign API returns "/object/sign/..." but the correct download path
+// needs "/storage/v1/object/sign/...". Fix it if the backend returned the wrong form.
+function fixSignedUrl(url: string): string {
+  if (!url) return url
+  try {
+    const u = new URL(url)
+    if (u.pathname.startsWith('/object/sign/')) {
+      u.pathname = '/storage/v1' + u.pathname
+      return u.toString()
+    }
+  } catch { /* not a valid URL, return as-is */ }
+  return url
+}
+
 interface ExportFile {
   name: string
   created_at: string
@@ -49,8 +63,9 @@ export default function HistoryPage({ userId }: { userId: string }) {
   const openViewer = async (f: ExportFile) => {
     setViewer({ file: f, content: null, loading: true, error: '' })
     try {
-      if (!f.download_url) throw new Error('No download URL available')
-      const res = await fetch(f.download_url)
+      const url = fixSignedUrl(f.download_url)
+      if (!url) throw new Error('No download URL available')
+      const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const text = await res.text()
       setViewer(v => v ? { ...v, content: text, loading: false } : null)
@@ -60,19 +75,20 @@ export default function HistoryPage({ userId }: { userId: string }) {
   }
 
   const downloadFile = async (f: ExportFile) => {
-    if (!f.download_url) { alert('Download URL not available'); return }
+    const url = fixSignedUrl(f.download_url)
+    if (!url) { alert('Download URL not available'); return }
     try {
-      const res = await fetch(f.download_url)
+      const res = await fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
+      const objUrl = URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
+      a.href = objUrl
       a.download = f.name
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      URL.revokeObjectURL(objUrl)
     } catch (e: any) { alert('Download failed: ' + e.message) }
   }
 
