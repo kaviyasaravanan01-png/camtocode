@@ -582,6 +582,36 @@ def db_inc_monthly(
     except Exception:
         pass
 
+def db_reset_usage_on_expiry(user_id: str) -> None:
+    """Zero out daily and monthly usage counters when a plan expires.
+    Called once when a paid plan is auto-downgraded to free so the user
+    starts the free plan with a clean slate rather than being immediately
+    blocked by usage accrued on the paid plan."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
+        return
+    date_str  = datetime.now().strftime("%Y-%m-%d")
+    month_str = datetime.now().strftime("%Y-%m")
+    zero_daily   = {"scans": 0, "ai_scans": 0}
+    zero_monthly = {
+        "scans": 0, "ai_fixes": 0,
+        "haiku_fix_tokens": 0, "sonnet_fix_tokens": 0, "files_saved": 0,
+    }
+    try:
+        httpx.patch(
+            f"{SUPABASE_URL}/rest/v1/daily_usage?user_id=eq.{user_id}&date=eq.{date_str}",
+            json=zero_daily, headers={**_rest_hdr(), "Prefer": "return=minimal"}, timeout=5,
+        )
+    except Exception:
+        pass
+    try:
+        httpx.patch(
+            f"{SUPABASE_URL}/rest/v1/monthly_usage?user_id=eq.{user_id}&month=eq.{month_str}",
+            json=zero_monthly, headers={**_rest_hdr(), "Prefer": "return=minimal"}, timeout=5,
+        )
+    except Exception:
+        pass
+    print(f"[plan] reset usage counters for {user_id} after expiry downgrade", flush=True)
+
 def db_get_file_count(user_id: str) -> int:
     """Count exported files for this user this month."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
@@ -609,6 +639,7 @@ def load_user_plan_usage(sess: "UserSession") -> None:
                 if exp_dt < datetime.now(timezone.utc):
                     print(f"[plan] expired for {sess.user_email} — downgrading to free", flush=True)
                     db_upsert_plan(sess.user_id, "free")
+                    db_reset_usage_on_expiry(sess.user_id)
                     plan, started_at, expires_at = "free", None, None
             except Exception:
                 pass
@@ -2664,6 +2695,7 @@ def my_plan():
                 exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
                 if exp_dt < datetime.now(timezone.utc):
                     db_upsert_plan(user_id, "free")
+                    db_reset_usage_on_expiry(user_id)
                     plan, started_at, expires_at = "free", None, None
             except Exception:
                 pass
