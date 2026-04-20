@@ -651,6 +651,18 @@ def load_user_plan_usage(sess: "UserSession") -> None:
     daily    = db_get_daily(sess.user_id, today)
     monthly  = db_get_monthly(sess.user_id, month)
 
+    # If plan is free but counts exceed what is possible on free
+    # (carried over from a now-expired paid plan), reset them.
+    free_lim = PLANS["free"]
+    if sess.plan == "free" and (
+        daily.get("ai_scans", 0)   > free_lim["ai_scans_day"] or
+        monthly.get("ai_fixes", 0) > 0
+    ):
+        print(f"[plan] free user {sess.user_email} has paid-plan leftovers — resetting", flush=True)
+        db_reset_usage_on_expiry(sess.user_id)
+        daily   = db_get_daily(sess.user_id, today)
+        monthly = db_get_monthly(sess.user_id, month)
+
     sess.usage_today_scans          = daily.get("scans",            0)
     sess.usage_today_ai_scans       = daily.get("ai_scans",         0)
     sess.usage_month_scans          = monthly.get("scans",           0)
@@ -2703,6 +2715,17 @@ def my_plan():
     month = datetime.now().strftime("%Y-%m")
     daily   = db_get_daily(user_id, today)
     monthly = db_get_monthly(user_id, month)
+
+    # If plan is free but counts exceed what is possible on free
+    # (carried over from a now-expired paid plan), reset them.
+    free_lim = PLANS["free"]
+    if plan == "free" and (
+        daily.get("ai_scans", 0)   > free_lim["ai_scans_day"] or
+        monthly.get("ai_fixes", 0) > 0
+    ):
+        db_reset_usage_on_expiry(user_id)
+        daily   = db_get_daily(user_id, today)
+        monthly = db_get_monthly(user_id, month)
 
     return jsonify({
         "plan":              plan,
