@@ -110,7 +110,13 @@ export default function PayButton({ plan, label, style }: Props) {
         setLoading(false)
       },
       modal: {
-        ondismiss: () => { setLoading(false) },
+        ondismiss: () => {
+          setLoading(false)
+          // For async payments (UPI), the modal closes before handler fires.
+          // Redirect to /account so the user sees their plan once the
+          // webhook upgrades it (usually within a few seconds).
+          window.location.href = '/account'
+        },
       },
     }
 
