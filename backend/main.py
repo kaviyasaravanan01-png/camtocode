@@ -2554,15 +2554,22 @@ def create_order():
     if plan not in PLAN_PRICES_INR:
         return jsonify({"error": f"Plan must be one of: {list(PLAN_PRICES_INR)}"}), 400
 
-    user_id = payload.get("sub", "")
-    receipt = f"order_{plan}_{user_id[:8]}_{_uuid.uuid4().hex[:8]}"
+    user_id    = payload.get("sub", "")
+    user_email = payload.get("email", "")
+    receipt    = f"order_{plan}_{user_id[:8]}_{_uuid.uuid4().hex[:8]}"
+
+    # Test-price override: ₹10 for specific testers only
+    TEST_PRICE_EMAILS: dict[str, dict[str, int]] = {
+        "previztech@gmail.com": {"starter": 1000, "pro": 1000},  # ₹10
+    }
+    amount = TEST_PRICE_EMAILS.get(user_email, PLAN_PRICES_INR).get(plan, PLAN_PRICES_INR[plan])
 
     try:
         resp = httpx.post(
             "https://api.razorpay.com/v1/orders",
             auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET),
             json={
-                "amount":   PLAN_PRICES_INR[plan],
+                "amount":   amount,
                 "currency": "INR",
                 "receipt":  receipt,
                 "notes":    {"plan": plan, "user_id": user_id},
