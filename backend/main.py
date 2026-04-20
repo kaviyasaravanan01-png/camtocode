@@ -583,34 +583,32 @@ def db_inc_monthly(
         pass
 
 def db_reset_usage_on_expiry(user_id: str) -> None:
-    """Zero out daily and monthly usage counters when a plan expires.
-    Called once when a paid plan is auto-downgraded to free so the user
-    starts the free plan with a clean slate rather than being immediately
-    blocked by usage accrued on the paid plan."""
+    """Reset scan/fix counters when a paid plan expires and downgrades to free.
+    Deletes the daily row (so reads return 0) and zeroes monthly scan/fix
+    fields while keeping files_saved intact (files still exist in storage)."""
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
         return
     date_str  = datetime.now().strftime("%Y-%m-%d")
     month_str = datetime.now().strftime("%Y-%m")
-    zero_daily   = {"scans": 0, "ai_scans": 0}
-    zero_monthly = {
-        "scans": 0, "ai_fixes": 0,
-        "haiku_fix_tokens": 0, "sonnet_fix_tokens": 0, "files_saved": 0,
-    }
+    # Delete today's daily row — next read returns {} → all counters = 0
     try:
-        httpx.patch(
+        r = httpx.delete(
             f"{SUPABASE_URL}/rest/v1/daily_usage?user_id=eq.{user_id}&date=eq.{date_str}",
-            json=zero_daily, headers={**_rest_hdr(), "Prefer": "return=minimal"}, timeout=5,
+            headers=_rest_hdr(), timeout=5,
         )
-    except Exception:
-        pass
+        print(f"[plan] reset daily_usage for {user_id}: HTTP {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"[plan] reset daily_usage failed: {e}", flush=True)
+    # Zero monthly scan/fix fields but keep files_saved (files still exist)
     try:
-        httpx.patch(
+        r = httpx.patch(
             f"{SUPABASE_URL}/rest/v1/monthly_usage?user_id=eq.{user_id}&month=eq.{month_str}",
-            json=zero_monthly, headers={**_rest_hdr(), "Prefer": "return=minimal"}, timeout=5,
+            json={"scans": 0, "ai_fixes": 0, "haiku_fix_tokens": 0, "sonnet_fix_tokens": 0},
+            headers={**_rest_hdr(), "Prefer": "return=minimal"}, timeout=5,
         )
-    except Exception:
-        pass
-    print(f"[plan] reset usage counters for {user_id} after expiry downgrade", flush=True)
+        print(f"[plan] reset monthly_usage for {user_id}: HTTP {r.status_code}", flush=True)
+    except Exception as e:
+        print(f"[plan] reset monthly_usage failed: {e}", flush=True)
 
 def db_get_file_count(user_id: str) -> int:
     """Count exported files for this user this month."""
