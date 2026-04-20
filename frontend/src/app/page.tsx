@@ -426,6 +426,12 @@ export default function LandingPage() {
               <Link href="/app" style={s.footerLink}>Open App</Link>
             </div>
             <div style={s.footerCol}>
+              <span style={s.footerColTitle}>Legal</span>
+              <Link href="/terms"   style={s.footerLink}>Terms &amp; Conditions</Link>
+              <Link href="/privacy" style={s.footerLink}>Privacy Policy</Link>
+              <Link href="/refund"  style={s.footerLink}>Refund Policy</Link>
+            </div>
+            <div style={s.footerCol}>
               <span style={s.footerColTitle}>Support</span>
               <a href="#help" style={s.footerLink}>FAQ</a>
               <a href="mailto:anandanathurelangovan94@gmail.com" style={s.footerLink}>Contact Us</a>
@@ -434,7 +440,12 @@ export default function LandingPage() {
         </div>
         <div style={s.footerBottom}>
           <span style={s.footerCopy}>© {new Date().getFullYear()} CamToCode. All rights reserved.</span>
-          <span style={s.footerCopy}>Prices in USD · Powered by Anthropic Claude</span>
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' as any }}>
+            <Link href="/terms"   style={s.footerCopy}>Terms</Link>
+            <Link href="/privacy" style={s.footerCopy}>Privacy</Link>
+            <Link href="/refund"  style={s.footerCopy}>Refund Policy</Link>
+            <span style={s.footerCopy}>Powered by Anthropic Claude</span>
+          </div>
         </div>
       </footer>
     </div>
