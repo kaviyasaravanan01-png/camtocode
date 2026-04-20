@@ -1617,8 +1617,9 @@ def list_user_exports(user_id: str):
     files = supabase_list_exports(user_id)
     result = []
     for f in files:
-        full_path    = f.get("name", "")          # e.g. "user_id/exports/file.py"
-        display_name = full_path.split("/")[-1]   # just "file.py"
+        file_name    = f.get("name", "")                          # just "file.py" (relative to prefix)
+        full_path    = f"{user_id}/exports/{file_name}"           # "user_id/exports/file.py"
+        display_name = file_name.split("/")[-1]                   # safety strip
         signed = supabase_signed_url(full_path)
         result.append({
             "name":         display_name,
@@ -2786,8 +2787,9 @@ def admin_user_files(user_id: str):
     files = supabase_list_exports(user_id)
     result = []
     for f in files:
-        full_path    = f.get("name", "")
-        display_name = full_path.split("/")[-1]
+        file_name    = f.get("name", "")
+        full_path    = f"{user_id}/exports/{file_name}"
+        display_name = file_name.split("/")[-1]
         signed = supabase_signed_url(full_path)
         result.append({
             "name":         display_name,
