@@ -825,7 +825,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             {outputText && <button onClick={() => { setFinalText(''); setLiveText(''); setScanCount(0) }} style={s.smallBtn}>Clear</button>}
             {scanCount > 0 && !capturing && (
               <button
-                onClick={() => setShowSaveModal(true)}
+                onClick={() => { setSaveAiEnabled(planUsage?.ai_fix_allowed === true); setShowSaveModal(true) }}
                 style={{ ...s.smallBtn, background: 'rgba(99,102,241,0.3)', borderColor: 'rgba(99,102,241,0.5)', color: '#a5b4fc' }}
               >
                 💾 Save File
@@ -860,15 +860,31 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               style={{ ...s.input, width: '100%', marginBottom: '0.75rem', boxSizing: 'border-box' }}
             />
             <div style={s.row}>
-              <span style={{ fontSize: '0.85rem' }}>AI Fix with Claude</span>
-              <label style={s.toggle}>
-                <input type="checkbox" checked={saveAiEnabled} onChange={() => setSaveAiEnabled(v => !v)} style={s.toggleInput} />
-                <span style={{ ...s.toggleSlider, background: saveAiEnabled ? '#4f46e5' : '#374151' }}>
-                  <span style={{ ...s.toggleKnob, left: saveAiEnabled ? 22 : 3 }} />
+              <span style={{ fontSize: '0.85rem', color: planUsage?.ai_fix_allowed === false ? 'rgba(255,255,255,0.35)' : undefined }}>
+                AI Fix with Claude
+                {planUsage?.ai_fix_allowed === false && (
+                  <span style={{ fontSize: '0.72rem', color: '#f59e0b', marginLeft: 8 }}>
+                    — <a href="/account" style={{ color: '#818cf8', textDecoration: 'none' }}>Upgrade to unlock</a>
+                  </span>
+                )}
+              </span>
+              <label
+                style={{ ...s.toggle, opacity: planUsage?.ai_fix_allowed === false ? 0.4 : 1, cursor: planUsage?.ai_fix_allowed === false ? 'not-allowed' : 'pointer' }}
+                title={planUsage?.ai_fix_allowed === false ? 'Upgrade to Starter or Pro to use AI Fix' : undefined}
+              >
+                <input
+                  type="checkbox"
+                  checked={saveAiEnabled}
+                  disabled={planUsage?.ai_fix_allowed === false}
+                  onChange={() => setSaveAiEnabled(v => !v)}
+                  style={s.toggleInput}
+                />
+                <span style={{ ...s.toggleSlider, background: saveAiEnabled && planUsage?.ai_fix_allowed !== false ? '#4f46e5' : '#374151' }}>
+                  <span style={{ ...s.toggleKnob, left: saveAiEnabled && planUsage?.ai_fix_allowed !== false ? 22 : 3 }} />
                 </span>
               </label>
             </div>
-            {saveAiEnabled && (
+            {saveAiEnabled && planUsage?.ai_fix_allowed !== false && (
               <div style={{ ...s.row, marginTop: 8 }}>
                 <span style={{ fontSize: '0.85rem' }}>Model</span>
                 <select value={saveModel} onChange={e => setSaveModel(e.target.value)} style={s.select}>
@@ -886,8 +902,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               >
                 Save as-is
               </button>
-              <button onClick={() => handleSaveSubmit(saveAiEnabled)} style={s.exportBtn} disabled={saving}>
-                {saving ? 'Saving...' : saveAiEnabled ? '✨ Fix & Save' : 'Save'}
+              <button onClick={() => handleSaveSubmit(saveAiEnabled && planUsage?.ai_fix_allowed !== false)} style={s.exportBtn} disabled={saving}>
+                {saving ? 'Saving...' : (saveAiEnabled && planUsage?.ai_fix_allowed !== false) ? '✨ Fix & Save' : 'Save'}
               </button>
             </div>
           </div>
