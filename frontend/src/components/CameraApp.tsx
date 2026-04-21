@@ -81,6 +81,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
   // UI state
   const [socketStatus, setSocketStatus] = useState<'connecting'|'connected'|'error'>('connecting')
+  const [showQualityTip, setShowQualityTip] = useState(() => {
+    try { return localStorage.getItem('ctc_quality_tip_dismissed') !== '1' } catch { return true }
+  })
   const [debugLog,     setDebugLog]     = useState<string[]>([])
   const [showDebug,    setShowDebug]    = useState(false)
   const [capturing,    setCapturing]    = useState(false)
@@ -708,7 +711,20 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           {planUsage?.plan === 'admin' && (
             <a href="/admin" style={{ ...s.historyLink, color: '#f59e0b' }}>Admin</a>
           )}
-          <button onClick={() => setShowSettings(v => !v)} style={s.iconBtn}>⚙️</button>
+          <button
+            onClick={() => setShowSettings(v => !v)}
+            style={{
+              ...s.iconBtn,
+              display: 'flex', alignItems: 'center', gap: 4,
+              fontSize: '0.8rem', color: showSettings ? '#818cf8' : '#cbd5e1',
+              background: showSettings ? 'rgba(99,102,241,0.15)' : 'transparent',
+              border: showSettings ? '1px solid rgba(99,102,241,0.35)' : '1px solid transparent',
+              borderRadius: 8, padding: '0.25rem 0.55rem',
+            }}
+          >
+            <span style={{ fontSize: '1rem' }}>⚙️</span>
+            <span style={{ fontWeight: 600, letterSpacing: '0.01em' }}>Settings</span>
+          </button>
           <button onClick={handleSignOut} style={s.signOutBtn}>Sign Out</button>
         </div>
       </div>
@@ -759,6 +775,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       {/* Settings */}
       {showSettings && (
         <div style={s.settingsPanel}>
+          {/* Settings header */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
+            <span style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Settings</span>
+            <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.35)', cursor: 'pointer', fontSize: '1rem', lineHeight: 1, padding: 0 }}>✕</button>
+          </div>
           <div style={s.row}>
             <span>Language</span>
             <select value={language} onChange={e => handleLanguageChange(e.target.value)} style={s.select}>
@@ -827,7 +848,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             <span>LLM Model</span>
             <select value={llmModel} onChange={e => handleModelChange(e.target.value)} style={s.select}>
               <option value="haiku">Haiku (Fast)</option>
-              <option value="sonnet">Sonnet (Best)</option>
+              <option value="sonnet" disabled style={{ color: 'rgba(255,255,255,0.3)' }}>Sonnet (Coming soon)</option>
             </select>
           </div>
           {bulkCapture && <>
@@ -875,6 +896,41 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           {roi && (
             <button onClick={clearRoi} style={{ ...s.roiPresetBtn, color: '#fca5a5', borderColor: 'rgba(239,68,68,0.3)' }}>✕ Clear</button>
           )}
+        </div>
+      )}
+
+      )}
+
+      {/* Quality tip banner — shown once, dismissible */}
+      {showQualityTip && (
+        <div style={{
+          background: 'linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.12))',
+          border: '1px solid rgba(99,102,241,0.35)',
+          borderRadius: 10,
+          padding: '0.65rem 0.9rem',
+          display: 'flex',
+          gap: 10,
+          alignItems: 'flex-start',
+        }}>
+          <span style={{ fontSize: '1.1rem', flexShrink: 0 }}>💡</span>
+          <div style={{ flex: 1, fontSize: '0.8rem', color: 'rgba(255,255,255,0.75)', lineHeight: 1.55 }}>
+            <strong style={{ color: '#c7d2fe' }}>Get cleaner scans</strong> — avoid VS Code or any IDE when scanning code.
+            IDEs add <strong style={{ color: '#fbbf24' }}>line numbers, gutter icons, and syntax highlights</strong> that confuse OCR.
+            Instead, open your file in a plain viewer:{' '}
+            <code style={{ background: 'rgba(0,0,0,0.35)', borderRadius: 4, padding: '1px 6px', fontSize: '0.78rem', color: '#6ee7b7' }}>cat filename.py</code>
+            {' '}in terminal, or Notepad / TextEdit for plain text — no line numbers, pure code.
+          </div>
+          <button
+            onClick={() => {
+              setShowQualityTip(false)
+              try { localStorage.setItem('ctc_quality_tip_dismissed', '1') } catch {}
+            }}
+            style={{
+              background: 'none', border: 'none', color: 'rgba(255,255,255,0.35)',
+              cursor: 'pointer', fontSize: '1rem', lineHeight: 1, flexShrink: 0, padding: '0 2px',
+            }}
+            title="Dismiss"
+          >✕</button>
         </div>
       )}
 
@@ -1164,9 +1220,9 @@ const s: Record<string, React.CSSProperties> = {
   iconBtn:      { background: 'transparent', border: 'none', fontSize: '1.1rem', padding: '0.25rem', cursor: 'pointer' },
   signOutBtn:   { background: 'rgba(239,68,68,0.2)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '0.3rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' },
   debugPanel:   { background: '#0a0a1a', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.5rem 0.75rem', maxHeight: 200, overflowY: 'auto' },
-  settingsPanel:{ background: 'rgba(0,0,0,0.4)', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.75rem 1rem', display: 'flex', flexDirection: 'column', gap: 10 },
-  row:          { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.875rem' },
-  select:       { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#e2e8f0', padding: '0.3rem 0.5rem', fontSize: '0.8rem' },
+  settingsPanel:{ background: 'rgba(0,0,0,0.5)', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.6rem 0.85rem', display: 'flex', flexDirection: 'column', gap: 8 },
+  row:          { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem', gap: 8, minHeight: 32 },
+  select:       { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: '#e2e8f0', padding: '0.3rem 0.5rem', fontSize: '0.8rem', minWidth: 0, maxWidth: '55%', flexShrink: 0 },
   toggle:       { position: 'relative', display: 'inline-block', width: 44, height: 24, cursor: 'pointer' },
   toggleInput:  { position: 'absolute', opacity: 0, width: 0, height: 0 },
   toggleSlider: { position: 'absolute', inset: 0, borderRadius: 12, transition: 'background 0.3s' },
