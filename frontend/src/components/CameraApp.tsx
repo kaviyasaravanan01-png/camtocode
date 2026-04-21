@@ -121,13 +121,15 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [saving,        setSaving]        = useState(false)
   const [pendingLang,   setPendingLang]   = useState('')
   // Auto re-capture state
-  const [autoRecapture,       setAutoRecapture]       = useState(false)
-  const [recaptureInterval,   setRecaptureInterval]   = useState(5)
-  const [recaptureCountdown,  setRecaptureCountdown]  = useState(0)
-  const [recaptureTotal,      setRecaptureTotal]      = useState(5)
-  const [recapturePaused,     setRecapturePaused]     = useState(false)
+  const [autoRecapture,         setAutoRecapture]         = useState(false)
+  const [recaptureInterval,     setRecaptureInterval]     = useState(5)
+  const [recaptureCountdown,    setRecaptureCountdown]    = useState(0)
+  const [recaptureTotal,        setRecaptureTotal]        = useState(5)
+  const [recapturePaused,       setRecapturePaused]       = useState(false)
   const [recaptureSessionActive, setRecaptureSessionActive] = useState(false)
-  const recaptureRemainingRef = useRef(0)
+  const [recaptureSeparator,    setRecaptureSeparator]    = useState(false)
+  const recaptureRemainingRef   = useRef(0)
+  const recaptureSeparatorRef   = useRef(false)  // readable inside socket closure
 
   // ROI state
   const [roi,     setRoi]     = useState<ROI | null>(null)
@@ -139,6 +141,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   // Keep refs in sync with state
   useEffect(() => { roiRef.current = roi }, [roi])
   useEffect(() => { showRoiRef.current = showRoi }, [showRoi])
+  useEffect(() => { recaptureSeparatorRef.current = recaptureSeparator }, [recaptureSeparator])
 
   const addLog = useCallback((msg: string) => {
     const ts = new Date().toLocaleTimeString()
@@ -427,6 +430,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setBulkBlocks(d.bulk_session_blocks); setBulkSession(d.bulk_session_number)
         if (d.auto_recapture_enabled !== undefined) setAutoRecapture(d.auto_recapture_enabled)
         if (d.auto_recapture_interval !== undefined) setRecaptureInterval(d.auto_recapture_interval)
+        if (d.auto_recapture_separator !== undefined) {
+          setRecaptureSeparator(d.auto_recapture_separator)
+          recaptureSeparatorRef.current = d.auto_recapture_separator
+        }
         if (d.plan_usage) setPlanUsage(d.plan_usage)
         addLog('State received')
       })
@@ -448,7 +455,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('result', (d: ResultData) => {
-        setFinalText(prev => prev ? prev + '\n\n────────────────────────\n\n' + d.text : d.text)
+        setFinalText(prev => {
+          if (!prev) return d.text
+          const sep = recaptureSeparatorRef.current ? '\n\n────────────────────────\n\n' : '\n\n'
+          return prev + sep + d.text
+        })
         setScanCount(prev => prev + 1)
         setLiveText(''); setLimitMsg('')
         setLastLang(d.lang); setAiUsed(d.ai_used)
@@ -638,6 +649,12 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     setRecaptureInterval(v)
     emit('set_recapture_interval', { interval: v })
   }
+  const handleRecaptureSeparatorToggle = () => {
+    const n = !recaptureSeparator
+    setRecaptureSeparator(n)
+    recaptureSeparatorRef.current = n
+    emit('set_recapture_separator', { enabled: n })
+  }
   const handlePauseRecapture = () => {
     setRecapturePaused(true)
     emit('pause_recapture')
@@ -753,8 +770,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             ['Claude AI OCR', aiEnabled,   handleAiToggle],
             ['Night Mode',    nightMode,   handleNightToggle],
             ['Auto Capture',  autoCapture, handleAutoToggle],
-            ['Auto Clear',    autoClear,   handleAutoClearToggle],
-            ['Bulk Capture',  bulkCapture, handleBulkToggle],
+            ['Auto Clear',       autoClear,         handleAutoClearToggle],
+            ['Scan Separator',   recaptureSeparator, handleRecaptureSeparatorToggle],
+            ['Bulk Capture',     bulkCapture,        handleBulkToggle],
           ] as [string, boolean, () => void][]).map(([label, val, fn]) => (
             <div key={label} style={s.row}>
               <span>{label}</span>

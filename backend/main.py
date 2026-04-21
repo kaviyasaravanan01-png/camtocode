@@ -235,6 +235,7 @@ class UserSession:
         self.auto_recapture_enabled    = False
         self.auto_recapture_interval   = 5      # seconds: 3,5,8,10,12,15,20
         self.auto_recapture_active     = False  # True while countdown thread running
+        self.auto_recapture_separator  = False  # Insert divider line between scans (shared with auto-capture)
         self.next_start_is_recapture   = False  # Set before recapture trigger so on_start() skips file clear
         self.language_hint         = ""
         self.llm_model_key         = "haiku"
@@ -1702,6 +1703,7 @@ def on_connect():
         "auto_clear_after_export": sess.auto_clear_after_export,
         "auto_recapture_enabled":  sess.auto_recapture_enabled,
         "auto_recapture_interval": sess.auto_recapture_interval,
+        "auto_recapture_separator": sess.auto_recapture_separator,
         "llm_model":               sess.llm_model_key,
         "bulk_capture":            sess.bulk_capture,
         "bulk_session_blocks":     sess.bulk_session_blocks,
@@ -1933,7 +1935,7 @@ def on_stop():
     # Save to Supabase Storage (per user) or local fallback
     # When auto_recapture is on, the file is NOT cleared between cycles (see on_start),
     # so prefix a separator so scans are clearly delimited in the stored file.
-    _file_sep = "\n────────────────────────\n\n" if sess.auto_recapture_enabled else ""
+    _file_sep = "\n────────────────────────\n\n" if sess.auto_recapture_separator else ""
     if sess.user_id and SUPABASE_URL:
         supabase_append_text(_sb_storage_path(sess.user_id), _file_sep + text + "\n\n")
     else:
@@ -2279,6 +2281,11 @@ def on_set_recapture_interval(data):
     if interval in (3, 5, 8, 10, 12, 15, 20):
         sess.auto_recapture_interval = interval
 
+
+@socketio.on("set_recapture_separator")
+def on_set_recapture_separator(data):
+    sess = get_session(request.sid)
+    sess.auto_recapture_separator = bool(data.get("enabled", True))
 
 @socketio.on("pause_recapture")
 def on_pause_recapture():
