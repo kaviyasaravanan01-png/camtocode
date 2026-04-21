@@ -899,8 +899,6 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
       )}
 
-      )}
-
       {/* Quality tip banner — shown once, dismissible */}
       {showQualityTip && (
         <div style={{
