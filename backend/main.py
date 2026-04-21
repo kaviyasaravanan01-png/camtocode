@@ -232,9 +232,10 @@ class UserSession:
         self.auto_capture          = True
         self.auto_clear_after_export = False
         # Auto re-capture (countdown after each capture when enabled)
-        self.auto_recapture_enabled  = False
-        self.auto_recapture_interval = 5      # seconds: 3,5,8,10,12,15,20
-        self.auto_recapture_active   = False  # True while countdown thread running
+        self.auto_recapture_enabled    = False
+        self.auto_recapture_interval   = 5      # seconds: 3,5,8,10,12,15,20
+        self.auto_recapture_active     = False  # True while countdown thread running
+        self.next_start_is_recapture   = False  # Set before recapture trigger so on_start() skips file clear
         self.language_hint         = ""
         self.llm_model_key         = "haiku"
         self.bulk_capture          = False
@@ -1749,10 +1750,15 @@ def on_start():
     sess.consec_sharp = 0
     sess.frame_buf.clear()
     sess.frame_rgb_buf.clear()
-    # Create/reset the live buffer in Supabase Storage
+    # Create/reset the live buffer in Supabase Storage.
+    # Skip the clear when this is an auto re-capture trigger so accumulated
+    # scans are preserved in the file. next_start_is_recapture is set by the
+    # frontend's recapture_start_signal just before emitting 'start'.
     if sess.user_id:
         sess.current_session_path = _sb_storage_path(sess.user_id)
-        supabase_write_text(sess.current_session_path, "")
+        if not sess.next_start_is_recapture:
+            supabase_write_text(sess.current_session_path, "")
+    sess.next_start_is_recapture = False   # consume the flag
     emit("status", {"capturing": True, "msg": "Capturing... hold phone steady"})
 
 
@@ -1925,12 +1931,15 @@ def on_stop():
     sess.last_saved = text
 
     # Save to Supabase Storage (per user) or local fallback
+    # When auto_recapture is on, the file is NOT cleared between cycles (see on_start),
+    # so prefix a separator so scans are clearly delimited in the stored file.
+    _file_sep = "\n────────────────────────\n\n" if sess.auto_recapture_enabled else ""
     if sess.user_id and SUPABASE_URL:
-        supabase_append_text(_sb_storage_path(sess.user_id), text + "\n\n")
+        supabase_append_text(_sb_storage_path(sess.user_id), _file_sep + text + "\n\n")
     else:
         try:
             with open(f"output_{sid}.txt", "a", encoding="utf-8") as f:
-                f.write(text + "\n\n")
+                f.write(_file_sep + text + "\n\n")
         except Exception:
             pass
 
@@ -1959,7 +1968,7 @@ def on_stop():
         supabase_write_text(_sb_storage_path(sess.user_id), "")
         emit("status", {"msg": "Auto-cleared for next session"})
 
-    if sess.auto_recapture_enabled:
+    if sess.auto_recapture_enabled and not sess.auto_recapture_active:
         sess.auto_recapture_active = True
         client_sid = request.sid
         interval   = sess.auto_recapture_interval
@@ -2255,6 +2264,14 @@ def on_set_auto_recapture(data):
     emit("auto_recapture_state", {"enabled": sess.auto_recapture_enabled})
 
 
+@socketio.on("recapture_start_signal")
+def on_recapture_start_signal():
+    """Frontend emits this just before 'start' on a recapture trigger so
+    on_start() knows not to wipe the accumulated Supabase file."""
+    sess = get_session(request.sid)
+    sess.next_start_is_recapture = True
+
+
 @socketio.on("set_recapture_interval")
 def on_set_recapture_interval(data):
     sess = get_session(request.sid)
@@ -2271,6 +2288,8 @@ def on_pause_recapture():
 
 @socketio.on("resume_recapture")
 def on_resume_recapture(data):
+    if not isinstance(data, dict):
+        data = {}
     sess = get_session(request.sid)
     if not sess.auto_recapture_enabled:
         return

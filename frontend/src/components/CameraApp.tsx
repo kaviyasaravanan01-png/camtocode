@@ -448,7 +448,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('result', (d: ResultData) => {
-        setFinalText(prev => prev ? prev + '\n\n' + d.text : d.text)
+        setFinalText(prev => prev ? prev + '\n\n────────────────────────\n\n' + d.text : d.text)
         setScanCount(prev => prev + 1)
         setLiveText(''); setLimitMsg('')
         setLastLang(d.lang); setAiUsed(d.ai_used)
@@ -498,6 +498,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setRecaptureSessionActive(true)
         setRecaptureCountdown(0)
         setRecapturePaused(false)
+        // Signal backend NOT to clear the accumulated file before starting
+        sock.emit('recapture_start_signal')
         // Trigger a new capture cycle
         handleStartRef.current?.()
       })
