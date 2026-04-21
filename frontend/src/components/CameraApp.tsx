@@ -752,7 +752,6 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             ['Night Mode',    nightMode,   handleNightToggle],
             ['Auto Capture',  autoCapture, handleAutoToggle],
             ['Auto Clear',    autoClear,   handleAutoClearToggle],
-            ['Auto Re-capture', autoRecapture, handleAutoRecaptureToggle],
             ['Bulk Capture',  bulkCapture, handleBulkToggle],
           ] as [string, boolean, () => void][]).map(([label, val, fn]) => (
             <div key={label} style={s.row}>
@@ -765,6 +764,37 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               </label>
             </div>
           ))}
+
+          {/* Auto Re-capture — Starter/Pro only */}
+          {(() => {
+            const allowed = planUsage?.plan === 'starter' || planUsage?.plan === 'pro' || planUsage?.plan === 'admin'
+            return (
+              <div key="auto-recapture" style={s.row}>
+                <span style={{ color: allowed ? undefined : 'rgba(255,255,255,0.35)' }}>
+                  Auto Re-capture
+                  {!allowed && (
+                    <span style={{
+                      marginLeft: 6,
+                      fontSize: '0.65rem',
+                      background: 'rgba(251,191,36,0.15)',
+                      color: '#fbbf24',
+                      borderRadius: 4,
+                      padding: '1px 5px',
+                    }}>Starter+</span>
+                  )}
+                </span>
+                <label
+                  style={{ ...s.toggle, opacity: allowed ? 1 : 0.4, cursor: allowed ? 'pointer' : 'not-allowed' }}
+                  title={allowed ? undefined : 'Upgrade to Starter or Pro plan to use Auto Re-capture'}
+                >
+                  <input type="checkbox" checked={autoRecapture} onChange={allowed ? handleAutoRecaptureToggle : undefined} disabled={!allowed} style={s.toggleInput} />
+                  <span style={{ ...s.toggleSlider, background: autoRecapture && allowed ? '#4f46e5' : '#374151' }}>
+                    <span style={{ ...s.toggleKnob, left: autoRecapture && allowed ? 22 : 3 }} />
+                  </span>
+                </label>
+              </div>
+            )
+          })()}
           {autoRecapture && (
             <div style={s.row}>
               <span>Re-capture interval</span>

@@ -229,7 +229,7 @@ class UserSession:
         self.frame_rgb_buf: list[np.ndarray]     = []
         self.ai_enabled            = True
         self.night_mode            = False
-        self.auto_capture          = False
+        self.auto_capture          = True
         self.auto_clear_after_export = False
         # Auto re-capture (countdown after each capture when enabled)
         self.auto_recapture_enabled  = False
