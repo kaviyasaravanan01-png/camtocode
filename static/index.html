@@ -590,6 +590,18 @@
 </div>
 <p class="tip" style="margin-top:-4px">&#128247; <strong>Photo mode</strong>: opens native camera for a full-res single shot — best for accuracy</p>
 
+<!-- Auto Re-capture Countdown — visible on main screen -->
+<div id="recapture-countdown-display" style="display:none; margin:10px 0 4px; padding:14px 16px; background:rgba(34,197,94,0.12); border:2px solid #22c55e; border-radius:12px; text-align:center; color:#22c55e; font-family:inherit;">
+  <div style="font-size:13px; font-weight:600; letter-spacing:.04em; margin-bottom:6px; opacity:.85;">&#128257; NEXT AUTO-CAPTURE IN</div>
+  <div style="display:flex; align-items:center; justify-content:center; gap:10px; flex-wrap:wrap;">
+    <span id="countdown-value" style="font-size:48px; font-weight:900; line-height:1; min-width:56px; display:inline-block;">0</span>
+    <span style="font-size:18px; font-weight:700; opacity:.7;">sec</span>
+    <button id="btn-pause-recapture" style="padding:6px 14px; background:#22c55e; color:#fff; border:none; border-radius:8px; cursor:pointer; font-size:13px; font-weight:700; min-width:90px;">&#9646;&#9646; Pause</button>
+    <button id="btn-stop-recapture" style="padding:6px 14px; background:#ef4444; color:#fff; border:none; border-radius:8px; cursor:pointer; font-size:13px; font-weight:700; min-width:90px;">&#9632; Stop</button>
+  </div>
+  <div style="font-size:11px; opacity:.6; margin-top:6px;">Stop ends auto re-capture &mdash; you can then export your file</div>
+</div>
+
 <!-- Settings panel -->
 <details id="settings-panel">
   <summary>
@@ -683,6 +695,35 @@
         <input type="checkbox" id="toggle-auto-clear">
         <span class="track"><span class="thumb"></span></span>
       </label>
+    </div>
+
+    <!-- Auto Re-capture (NEW) -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-name">Auto Re-capture</div>
+        <div class="setting-desc">Automatically trigger next capture after a countdown. Useful for hands-free scanning.</div>
+      </div>
+      <label class="ios-toggle">
+        <input type="checkbox" id="toggle-auto-recapture">
+        <span class="track"><span class="thumb"></span></span>
+      </label>
+    </div>
+
+    <!-- Auto Re-capture Interval -->
+    <div class="setting-row" id="recapture-interval-row" style="display: none;">
+      <div class="setting-info">
+        <div class="setting-name">Re-capture Interval</div>
+        <div class="setting-desc" id="recapture-desc">Delay before auto-triggering next capture (seconds)</div>
+      </div>
+      <select id="recapture-interval-select" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:4px 8px;font-size:13px;">
+        <option value="3">3 seconds</option>
+        <option value="5" selected>5 seconds</option>
+        <option value="8">8 seconds</option>
+        <option value="10">10 seconds</option>
+        <option value="12">12 seconds</option>
+        <option value="15">15 seconds</option>
+        <option value="20">20 seconds</option>
+      </select>
     </div>
 
     <!-- Capture Region (ROI) -->
@@ -876,6 +917,13 @@ const toggleNight   = document.getElementById('toggle-night');
 const toggleAI      = document.getElementById('toggle-ai');
 const toggleAutoCap = document.getElementById('toggle-auto-capture');
 const toggleAutoClear = document.getElementById('toggle-auto-clear');
+const toggleAutoRecapture = document.getElementById('toggle-auto-recapture');
+const recaptureIntervalRow = document.getElementById('recapture-interval-row');
+const recaptureIntervalSelect = document.getElementById('recapture-interval-select');
+const recaptureCountdownDisplay = document.getElementById('recapture-countdown-display');
+const countdownValue = document.getElementById('countdown-value');
+const btnPauseRecapture = document.getElementById('btn-pause-recapture');
+const btnStopRecapture  = document.getElementById('btn-stop-recapture');
 const modelRow      = document.getElementById('model-row');
 const aiModelBadge  = document.getElementById('ai-model-badge');
 const autoCapDesc   = document.getElementById('auto-cap-desc');
@@ -907,6 +955,9 @@ const SHARP_MAX = 400;   // clamp for quality bar display
 let intervalId       = null;
 let processingTimer  = null;
 let activeFile       = 'output.txt';
+let recaptureCountdownPaused = false;  // Track if countdown is paused
+let recaptureCountdownRemaining = 0;  // Store remaining time when paused
+let recaptureSessionActive = false;   // True after first auto re-capture trigger
 let roi              = null;   // {x1, y1, x2, y2} normalised 0-1
 // ROI interaction state
 let roiInteraction   = 'idle'; // 'idle' | 'draw' | 'move' | 'resize'
@@ -1419,6 +1470,8 @@ function startCapture() {
     return;
   }
   socket.emit('start');
+  recaptureCountdownDisplay.style.display = 'none'; // Hide countdown when starting new capture
+  recaptureCountdownPaused = false; // Reset pause state
   btnStart.disabled   = true;
   btnStop.disabled    = false;
   btnStop.textContent = '\u25A0 Stop';
@@ -1435,6 +1488,7 @@ function stopCapture() {
   clearInterval(intervalId);
   intervalId = null;
   socket.emit('stop');
+  recaptureCountdownDisplay.style.display = 'none'; // Hide countdown when stopping capture
   btnStop.textContent = '\u23F3 Processing\u2026';
   btnStop.disabled    = true;
   btnStart.disabled   = true;
@@ -1641,6 +1695,7 @@ function showPlainText(text) {
 
 socket.on('init_state', ({ ai_enabled, night_mode, auto_capture,
                            auto_capture_frames, auto_clear_after_export,
+                           auto_recapture_enabled, auto_recapture_interval,
                            llm_model,
                            current_file, files,
                            bulk_capture: initBulk,
@@ -1650,6 +1705,10 @@ socket.on('init_state', ({ ai_enabled, night_mode, auto_capture,
   toggleAI.checked      = ai_enabled   || false;
   toggleAutoCap.checked = (auto_capture !== undefined) ? auto_capture : true;
   toggleAutoClear.checked = (auto_clear_after_export !== undefined) ? auto_clear_after_export : false;
+  toggleAutoRecapture.checked = (auto_recapture_enabled !== undefined) ? auto_recapture_enabled : false;
+  if (auto_recapture_interval !== undefined) {
+    recaptureIntervalSelect.value = auto_recapture_interval;
+  }
   socket.emit('set_auto', { enabled: toggleAutoCap.checked });
   modelRow.style.display = ai_enabled ? '' : 'none';
   if (auto_capture_frames) {
@@ -1690,9 +1749,16 @@ socket.on('status', ({ capturing, msg, current_file, files, bulk_block, bulk_ses
 
 socket.on('result', ({ text, lang, ai_used, syntax_ok, syntax_err, file }) => {
   if (text) {
-    // Final result is Claude-corrected — show as plain white text (fully trusted)
-    // Hide heatmap legend since this is the corrected output
-    showPlainText(text);
+    // Append result — build up all captures in preview across auto re-capture cycles
+    const existing = preview.textContent ? preview.textContent.trim() : '';
+    if (existing && recaptureSessionActive) {
+      // Auto re-capture cycle: append with visual separator
+      preview.textContent = existing + '\n\n─────────────────────\n\n' + text;
+    } else {
+      preview.textContent = text;
+    }
+    preview.classList.add('active');
+    preview.scrollTop = preview.scrollHeight;
     hmLegend.classList.remove('show');
     hmTitle.style.display = 'none';
     preview.style.borderRadius = '10px';
@@ -1737,6 +1803,44 @@ socket.on('auto_captured', ({ msg, frames }) => {
   stopCapture();
 });
 
+socket.on('recapture_countdown', ({ remaining, total }) => {
+  if (remaining === 0) {
+    // 0 is the flash shown just before trigger — hide countdown
+    recaptureCountdownDisplay.style.display = 'none';
+    recaptureCountdownPaused = false;
+    return;
+  }
+  recaptureCountdownDisplay.style.display = 'flex';
+  countdownValue.textContent = remaining;
+  recaptureCountdownRemaining = remaining;
+  if (!recaptureCountdownPaused) {
+    btnPauseRecapture.textContent = '\u23F8 Pause';
+    btnPauseRecapture.style.background = '#22c55e';
+  }
+});
+
+socket.on('recapture_trigger', () => {
+  // Backend finished countdown — start a new capture session
+  recaptureCountdownDisplay.style.display = 'none';
+  recaptureCountdownPaused = false;
+  recaptureSessionActive = true;   // Mark: we are in auto re-capture cycle, append text
+  startCapture();   // This emits 'start' and restarts the frame interval
+});
+
+socket.on('recapture_cancelled', () => {
+  recaptureCountdownDisplay.style.display = 'none';
+  recaptureCountdownPaused = false;
+});
+
+socket.on('auto_recapture_state', ({ enabled }) => {
+  toggleAutoRecapture.checked = enabled;
+  recaptureIntervalRow.style.display = enabled ? '' : 'none';
+  if (!enabled) {
+    recaptureCountdownDisplay.style.display = 'none';
+    recaptureCountdownPaused = false;
+  }
+});
+
 socket.on('files', ({ files, current_file }) => {
   updateFileDesc(current_file);
   renderFileList(files, current_file);
@@ -1758,6 +1862,43 @@ toggleAutoCap.addEventListener('change', () => {
 
 toggleAutoClear.addEventListener('change', () => {
   socket.emit('set_auto_clear', { enabled: toggleAutoClear.checked });
+});
+
+toggleAutoRecapture.addEventListener('change', () => {
+  socket.emit('set_auto_recapture', { enabled: toggleAutoRecapture.checked });
+  recaptureIntervalRow.style.display = toggleAutoRecapture.checked ? '' : 'none';
+});
+
+recaptureIntervalSelect.addEventListener('change', () => {
+  const interval = parseInt(recaptureIntervalSelect.value);
+  socket.emit('set_recapture_interval', { interval });
+});
+
+btnPauseRecapture.addEventListener('click', () => {
+  if (!recaptureCountdownPaused) {
+    // Pause: freeze the countdown display, tell backend to stop ticking
+    recaptureCountdownPaused = true;
+    recaptureCountdownRemaining = parseInt(countdownValue.textContent) || 1;
+    btnPauseRecapture.textContent = '\u25B6 Resume';
+    btnPauseRecapture.style.background = '#f59e0b';
+    socket.emit('pause_recapture', { remaining: recaptureCountdownRemaining });
+  } else {
+    // Resume: tell backend to restart ticking from remaining seconds
+    recaptureCountdownPaused = false;
+    btnPauseRecapture.textContent = '\u23F8 Pause';
+    btnPauseRecapture.style.background = '#22c55e';
+    socket.emit('resume_recapture', { remaining: recaptureCountdownRemaining });
+  }
+});
+
+btnStopRecapture.addEventListener('click', () => {
+  // Stop auto re-capture session: disable toggle, cancel countdown, hide display
+  toggleAutoRecapture.checked = false;
+  recaptureIntervalRow.style.display = 'none';
+  recaptureCountdownDisplay.style.display = 'none';
+  recaptureCountdownPaused = false;
+  recaptureSessionActive = false;
+  socket.emit('set_auto_recapture', { enabled: false });  // disables on backend too
 });
 
 toggleBulkCap.addEventListener('change', () => {
@@ -1909,7 +2050,13 @@ langSelect.addEventListener('change', () => {
 // ---------------------------------------------------------------------------
 // Main button listeners
 // ---------------------------------------------------------------------------
-btnStart.addEventListener('click', startCapture);
+btnStart.addEventListener('click', () => {
+  // Manual start: clear preview and reset auto re-capture session
+  preview.textContent = '';
+  preview.classList.remove('active');
+  recaptureSessionActive = false;
+  startCapture();
+});
 btnStop.addEventListener('click', stopCapture);
 
 // ---------------------------------------------------------------------------

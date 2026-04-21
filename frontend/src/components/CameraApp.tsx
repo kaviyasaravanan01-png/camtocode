@@ -120,6 +120,15 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [saveModel,     setSaveModel]     = useState('haiku')
   const [saving,        setSaving]        = useState(false)
   const [pendingLang,   setPendingLang]   = useState('')
+  // Auto re-capture state
+  const [autoRecapture,       setAutoRecapture]       = useState(false)
+  const [recaptureInterval,   setRecaptureInterval]   = useState(5)
+  const [recaptureCountdown,  setRecaptureCountdown]  = useState(0)
+  const [recaptureTotal,      setRecaptureTotal]      = useState(5)
+  const [recapturePaused,     setRecapturePaused]     = useState(false)
+  const [recaptureSessionActive, setRecaptureSessionActive] = useState(false)
+  const recaptureRemainingRef = useRef(0)
+
   // ROI state
   const [roi,     setRoi]     = useState<ROI | null>(null)
   const [showRoi, setShowRoi] = useState(false)
@@ -416,6 +425,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setAutoCapture(d.auto_capture); setAutoClear(d.auto_clear_after_export)
         setLlmModel(d.llm_model); setBulkCapture(d.bulk_capture)
         setBulkBlocks(d.bulk_session_blocks); setBulkSession(d.bulk_session_number)
+        if (d.auto_recapture_enabled !== undefined) setAutoRecapture(d.auto_recapture_enabled)
+        if (d.auto_recapture_interval !== undefined) setRecaptureInterval(d.auto_recapture_interval)
         if (d.plan_usage) setPlanUsage(d.plan_usage)
         addLog('State received')
       })
@@ -476,6 +487,35 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('plan_usage', (d: PlanUsage) => setPlanUsage(d))
+
+      sock.on('recapture_countdown', (d: { remaining: number; total: number }) => {
+        setRecaptureCountdown(d.remaining)
+        setRecaptureTotal(d.total)
+        recaptureRemainingRef.current = d.remaining
+      })
+
+      sock.on('recapture_trigger', () => {
+        setRecaptureSessionActive(true)
+        setRecaptureCountdown(0)
+        setRecapturePaused(false)
+        // Trigger a new capture cycle
+        handleStartRef.current?.()
+      })
+
+      sock.on('recapture_cancelled', () => {
+        setRecaptureCountdown(0)
+        setRecapturePaused(false)
+        setRecaptureSessionActive(false)
+        setAutoRecapture(false)
+      })
+
+      sock.on('auto_recapture_state', (d: { enabled: boolean }) => {
+        setAutoRecapture(d.enabled)
+        if (!d.enabled) {
+          setRecaptureCountdown(0)
+          setRecapturePaused(false)
+        }
+      })
 
       sock.on('language_set', (d: { language: string }) => setLanguage(d.language === 'auto' ? '' : d.language))
     }
@@ -551,6 +591,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const handleStopRef = useRef(handleStop)
   useEffect(() => { handleStopRef.current = handleStop }, [handleStop])
 
+  const handleStartRef = useRef(handleStart)
+  useEffect(() => { handleStartRef.current = handleStart }, [handleStart])
+
   // Photo with optional ROI crop
   const handlePhoto = useCallback(() => {
     const video = videoRef.current, canvas = canvasRef.current
@@ -582,6 +625,32 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const handleModelChange     = (m: string) => { setLlmModel(m); emit('set_model', { model: m }) }
   const handleBulkToggle      = () => { const n = !bulkCapture; setBulkCapture(n); emit('set_bulk', { enabled: n }) }
   const handleResetBulk       = () => { emit('reset_bulk_session'); setBulkBlocks(0) }
+
+  const handleAutoRecaptureToggle = () => {
+    const n = !autoRecapture
+    setAutoRecapture(n)
+    emit('set_auto_recapture', { enabled: n })
+    if (!n) { setRecaptureCountdown(0); setRecapturePaused(false); setRecaptureSessionActive(false) }
+  }
+  const handleRecaptureIntervalChange = (v: number) => {
+    setRecaptureInterval(v)
+    emit('set_recapture_interval', { interval: v })
+  }
+  const handlePauseRecapture = () => {
+    setRecapturePaused(true)
+    emit('pause_recapture')
+  }
+  const handleResumeRecapture = () => {
+    setRecapturePaused(false)
+    emit('resume_recapture', { remaining: recaptureRemainingRef.current || recaptureInterval })
+  }
+  const handleStopRecaptureSession = () => {
+    emit('set_auto_recapture', { enabled: false })
+    setAutoRecapture(false)
+    setRecaptureCountdown(0)
+    setRecapturePaused(false)
+    setRecaptureSessionActive(false)
+  }
 
   const handleCopy = (text: string) => navigator.clipboard.writeText(text).then(() => setStatusMsg('Copied!'))
   const handleSaveSubmit = (withAi: boolean) => {
@@ -683,6 +752,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             ['Night Mode',    nightMode,   handleNightToggle],
             ['Auto Capture',  autoCapture, handleAutoToggle],
             ['Auto Clear',    autoClear,   handleAutoClearToggle],
+            ['Auto Re-capture', autoRecapture, handleAutoRecaptureToggle],
             ['Bulk Capture',  bulkCapture, handleBulkToggle],
           ] as [string, boolean, () => void][]).map(([label, val, fn]) => (
             <div key={label} style={s.row}>
@@ -695,6 +765,14 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               </label>
             </div>
           ))}
+          {autoRecapture && (
+            <div style={s.row}>
+              <span>Re-capture interval</span>
+              <select value={recaptureInterval} onChange={e => handleRecaptureIntervalChange(Number(e.target.value))} style={s.select}>
+                {[3, 5, 8, 10, 12, 15, 20].map(v => <option key={v} value={v}>{v}s</option>)}
+              </select>
+            </div>
+          )}
           <div style={s.row}>
             <span>LLM Model</span>
             <select value={llmModel} onChange={e => handleModelChange(e.target.value)} style={s.select}>
@@ -783,7 +861,17 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       <div style={s.controls}>
         {!capturing ? (
           <>
-            <button onClick={handleStart} disabled={socketStatus !== 'connected'}
+            <button onClick={() => {
+              // If a countdown is running, stop it before starting fresh
+              if (recaptureCountdown > 0 || recapturePaused) {
+                emit('pause_recapture')
+                setRecaptureCountdown(0)
+                setRecapturePaused(false)
+              }
+              setRecaptureSessionActive(false)
+              setFinalText('')
+              handleStart()
+            }} disabled={socketStatus !== 'connected'}
               style={{ ...s.startBtn, opacity: socketStatus !== 'connected' ? 0.5 : 1 }}>
               ▶ Start
             </button>
@@ -797,7 +885,83 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         )}
       </div>
 
-      {/* Status bar */}
+      {/* Auto Re-capture Countdown Banner */}
+      {recaptureCountdown > 0 && (
+        <div style={{
+          background: 'rgba(99,102,241,0.15)',
+          border: '1px solid rgba(99,102,241,0.4)',
+          borderRadius: 10,
+          padding: '0.75rem 1rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          flexWrap: 'wrap' as const,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Next auto-capture in
+            </span>
+            <span style={{
+              fontSize: '2.2rem',
+              fontWeight: 900,
+              color: '#818cf8',
+              lineHeight: 1,
+              minWidth: 40,
+              textAlign: 'center',
+            }}>
+              {recaptureCountdown}
+            </span>
+            <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>sec</span>
+            {recaptureSessionActive && (
+              <span style={{ fontSize: '0.7rem', background: 'rgba(34,197,94,0.15)', color: '#4ade80', borderRadius: 4, padding: '2px 6px' }}>
+                Session Active
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {!recapturePaused ? (
+              <button onClick={handlePauseRecapture} style={{
+                background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)',
+                color: '#fbbf24', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+              }}>⏸ Pause</button>
+            ) : (
+              <button onClick={handleResumeRecapture} style={{
+                background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
+                color: '#4ade80', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+              }}>▶ Resume</button>
+            )}
+            <button onClick={handleStopRecaptureSession} style={{
+              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
+              color: '#f87171', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+            }}>■ Stop Session</button>
+          </div>
+        </div>
+      )}
+      {recapturePaused && recaptureCountdown === 0 && (
+        <div style={{
+          background: 'rgba(251,191,36,0.1)',
+          border: '1px solid rgba(251,191,36,0.3)',
+          borderRadius: 10,
+          padding: '0.6rem 1rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}>
+          <span style={{ fontSize: '0.82rem', color: '#fbbf24' }}>⏸ Auto re-capture paused</span>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={handleResumeRecapture} style={{
+              background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
+              color: '#4ade80', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+            }}>▶ Resume</button>
+            <button onClick={handleStopRecaptureSession} style={{
+              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
+              color: '#f87171', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+            }}>■ Stop Session</button>
+          </div>
+        </div>
+      )}
       <div style={s.statusBar}>
         <span style={{ flex: 1 }}>{statusMsg}</span>
         {lastLang && <span style={s.langTag}>{lastLang}{aiUsed ? ' ✨' : ''}</span>}

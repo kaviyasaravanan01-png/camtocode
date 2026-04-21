@@ -84,7 +84,7 @@ def _make_anthropic_client(api_key: str):
 # Configuration
 # ---------------------------------------------------------------------------
 # Set ANTHROPIC_API_KEY in your environment or a .env file — never hardcode it here
-# os.environ["ANTHROPIC_API_KEY"] = "..."  # REMOVED — use env var instead
+os.environ["ANTHROPIC_API_KEY"] = "..."  # REMOVED — use env var instead
 
 PORT                = 5000
 OUTPUT_FILE         = "output.txt"
@@ -147,6 +147,10 @@ ai_enabled     = True   # enabled by default — API key is set above
 night_mode     = False
 auto_capture   = False
 auto_clear_after_export = False  # NEW: auto-clear file after session/export
+# --- Auto Re-capture (NEW) ---
+auto_recapture_enabled  = False  # Toggle: user wants auto re-capture
+auto_recapture_interval = 5      # Seconds between captures (3, 5, 8, 10, 12, 15, 20)
+auto_recapture_active   = False  # TRUE when countdown is running after a capture
 current_file   = OUTPUT_FILE
 llm_model_key  = "haiku"
 _consec_sharp  = 0
@@ -1689,6 +1693,8 @@ def on_connect():
         "auto_capture":            auto_capture,
         "auto_capture_frames":     AUTO_CAPTURE_FRAMES,
         "auto_clear_after_export": auto_clear_after_export,
+        "auto_recapture_enabled":  auto_recapture_enabled,
+        "auto_recapture_interval": auto_recapture_interval,
         "llm_model":               llm_model_key,
         "current_file":            current_file,
         "files":                   list_txt_files(),
@@ -1965,6 +1971,46 @@ def on_stop():
             emit("status", {"msg": f"Auto-cleared {save_to} for next session"})
         except Exception as e:
             print(f"[Auto-clear error] {e}", flush=True)
+
+    # --- Auto Re-capture: Start countdown if enabled ---
+    if auto_recapture_enabled:
+        global auto_recapture_active
+        auto_recapture_active = True
+        client_sid = request.sid  # Capture the client's session ID for use in thread
+
+        def countdown_timer():
+            """Run countdown in background, emit tick every second."""
+            global auto_recapture_active
+            print(f"[Auto Re-capture] Countdown started: {auto_recapture_interval}s", flush=True)
+            for remaining in range(auto_recapture_interval, 0, -1):
+                if not auto_recapture_active:
+                    # Paused (auto_recapture_enabled still True) or stopped (disabled)
+                    if not auto_recapture_enabled:
+                        # Toggle was turned off — tell frontend to hide display
+                        print(f"[Auto Re-capture] Cancelled (disabled)", flush=True)
+                        socketio.emit("recapture_cancelled", {}, to=client_sid)
+                    else:
+                        # Paused by user — frontend already shows "Resume" button, do nothing
+                        print(f"[Auto Re-capture] Paused at {remaining}s", flush=True)
+                    return
+                socketio.emit("recapture_countdown", {"remaining": remaining, "total": auto_recapture_interval}, to=client_sid)
+                import time
+                time.sleep(1)
+
+            # Countdown finished — tell frontend to start the next capture
+            if auto_recapture_active and auto_recapture_enabled:
+                auto_recapture_active = False
+                print(f"[Auto Re-capture] Triggering next capture", flush=True)
+                # Emit countdown=0 so UI shows 0 before hiding
+                socketio.emit("recapture_countdown", {"remaining": 0, "total": auto_recapture_interval}, to=client_sid)
+                import time
+                time.sleep(0.2)
+                # Tell frontend to kick off a new capture (frontend calls startCapture)
+                socketio.emit("recapture_trigger", {}, to=client_sid)
+
+        import threading
+        countdown_thread = threading.Thread(target=countdown_timer, daemon=True)
+        countdown_thread.start()
 
 
 # ===========================================================================
@@ -2264,6 +2310,83 @@ def on_set_auto_clear(data):
     global auto_clear_after_export
     auto_clear_after_export = bool(data.get("enabled", False))
     emit("status", {"msg": f"Auto-clear after export {'on' if auto_clear_after_export else 'off'}"})
+
+
+@socketio.on("set_auto_recapture")
+def on_set_auto_recapture(data):
+    """Enable/disable auto re-capture after each capture finishes."""
+    global auto_recapture_enabled, auto_recapture_active
+    auto_recapture_enabled = bool(data.get("enabled", False))
+    if not auto_recapture_enabled:
+        auto_recapture_active = False  # Stop any active countdown
+    emit("status", {"msg": f"Auto re-capture {'on' if auto_recapture_enabled else 'off'}"})
+    emit("auto_recapture_state", {"enabled": auto_recapture_enabled})
+
+
+@socketio.on("set_recapture_interval")
+def on_set_recapture_interval(data):
+    """Set the interval (in seconds) for auto re-capture countdown."""
+    global auto_recapture_interval
+    interval = int(data.get("interval", 5))
+    # Validate: only allow 3, 5, 8, 10, 12, 15, 20
+    valid_intervals = [3, 5, 8, 10, 12, 15, 20]
+    if interval in valid_intervals:
+        auto_recapture_interval = interval
+        emit("status", {"msg": f"Auto re-capture interval: {interval}s"})
+    else:
+        emit("status", {"msg": f"Invalid interval. Must be one of: {valid_intervals}"})
+    emit("recapture_interval_set", {"interval": auto_recapture_interval})
+
+
+@socketio.on("pause_recapture")
+def on_pause_recapture(data):
+    """Pause the auto re-capture countdown."""
+    global auto_recapture_active
+    auto_recapture_active = False
+    remaining = data.get("remaining", 0)
+    print(f"[Auto Re-capture] Paused at {remaining}s remaining", flush=True)
+    emit("status", {"msg": f"Auto re-capture paused ({remaining}s remaining)"})
+
+
+@socketio.on("resume_recapture")
+def on_resume_recapture(data):
+    """Resume the auto re-capture countdown from where it was paused."""
+    global auto_recapture_active, auto_recapture_enabled
+    if auto_recapture_enabled:
+        auto_recapture_active = True
+        remaining = data.get("remaining", auto_recapture_interval)
+        print(f"[Auto Re-capture] Resumed with {remaining}s remaining", flush=True)
+        client_sid = request.sid
+
+        def resume_countdown():
+            """Resume countdown from paused state."""
+            global auto_recapture_active
+            print(f"[Auto Re-capture] Resume countdown: {remaining}s", flush=True)
+            for sec in range(remaining, 0, -1):
+                if not auto_recapture_active:
+                    if not auto_recapture_enabled:
+                        print(f"[Auto Re-capture] Resume cancelled (disabled)", flush=True)
+                        socketio.emit("recapture_cancelled", {}, to=client_sid)
+                    else:
+                        print(f"[Auto Re-capture] Resume paused at {sec}s", flush=True)
+                    return
+                socketio.emit("recapture_countdown", {"remaining": sec, "total": auto_recapture_interval}, to=client_sid)
+                import time
+                time.sleep(1)
+
+            # Countdown finished — tell frontend to start the next capture
+            if auto_recapture_active and auto_recapture_enabled:
+                auto_recapture_active = False
+                print(f"[Auto Re-capture] Triggering next capture after resume", flush=True)
+                socketio.emit("recapture_countdown", {"remaining": 0, "total": auto_recapture_interval}, to=client_sid)
+                import time
+                time.sleep(0.2)
+                socketio.emit("recapture_trigger", {}, to=client_sid)
+
+        import threading
+        resume_thread = threading.Thread(target=resume_countdown, daemon=True)
+        resume_thread.start()
+        emit("status", {"msg": f"Auto re-capture resumed ({remaining}s remaining)"})
 
 
 @socketio.on("set_model")
