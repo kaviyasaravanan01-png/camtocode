@@ -704,13 +704,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       <div style={s.header}>
         <span style={s.logo}>CamToCode</span>
         <div style={s.hRight}>
-          <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
           <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug log">🪲</button>
           <a href="/history" style={s.historyLink}>History</a>
           <a href="/account" style={s.historyLink}>Account</a>
-          {planUsage?.plan === 'admin' && (
+          {/* {planUsage?.plan === 'admin' && (
             <a href="/admin" style={{ ...s.historyLink, color: '#f59e0b' }}>Admin</a>
-          )}
+          )} */}
           <button
             onClick={() => setShowSettings(v => !v)}
             style={{
@@ -723,7 +723,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             }}
           >
             <span style={{ fontSize: '1rem' }}>⚙️</span>
-            <span style={{ fontWeight: 600, letterSpacing: '0.01em' }}>Settings</span>
+            {/* <span style={{ fontWeight: 600, letterSpacing: '0.01em' }}>Settings</span> */}
           </button>
           <button onClick={handleSignOut} style={s.signOutBtn}>Sign Out</button>
         </div>
