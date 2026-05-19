@@ -11,7 +11,7 @@ declare global {
 }
 
 interface Props {
-  plan: 'starter' | 'pro'
+  plan: 'starter' | 'pro' | 'starter_sa' | 'pro_sa' | 'scan_answer'
   label?: string
   style?: React.CSSProperties
 }
@@ -28,8 +28,19 @@ function loadRazorpayScript(): Promise<boolean> {
 }
 
 const PLAN_LABELS: Record<string, string> = {
-  starter: 'Starter — ₹599/month',
-  pro:     'Pro — ₹1,499/month',
+  starter:     'Starter — ₹599/month',
+  pro:         'Pro — ₹1,499/month',
+  starter_sa:  'Starter + Scan & Answer — ₹849/month',
+  pro_sa:      'Pro + Scan & Answer — ₹1,999/month',
+  scan_answer: 'Scan & Answer Only — ₹399/month',
+}
+
+const PLAN_COLORS: Record<string, string> = {
+  starter:     'linear-gradient(135deg,#0ea5e9,#0284c7)',
+  pro:         'linear-gradient(135deg,#7c3aed,#6d28d9)',
+  starter_sa:  'linear-gradient(135deg,#0ea5e9,#8b5cf6)',
+  pro_sa:      'linear-gradient(135deg,#8b5cf6,#7c3aed)',
+  scan_answer: 'linear-gradient(135deg,#10b981,#059669)',
 }
 
 export default function PayButton({ plan, label, style }: Props) {
@@ -88,7 +99,7 @@ export default function PayButton({ plan, label, style }: Props) {
       prefill: {
         email: session.user?.email || '',
       },
-      theme: { color: plan === 'pro' ? '#8b5cf6' : '#0ea5e9' },
+      theme: { color: plan === 'pro' || plan === 'pro_sa' ? '#8b5cf6' : plan === 'scan_answer' ? '#10b981' : '#0ea5e9' },
       handler: async (response: any) => {
         // 5. Verify payment on backend
         try {
@@ -145,9 +156,7 @@ export default function PayButton({ plan, label, style }: Props) {
           border:     'none',
           cursor:     loading ? 'not-allowed' : 'pointer',
           opacity:    loading ? 0.7 : 1,
-          background: plan === 'pro'
-            ? 'linear-gradient(135deg,#7c3aed,#6d28d9)'
-            : 'linear-gradient(135deg,#0ea5e9,#0284c7)',
+          background: PLAN_COLORS[plan] || 'linear-gradient(135deg,#0ea5e9,#0284c7)',
           ...style,
         }}
       >

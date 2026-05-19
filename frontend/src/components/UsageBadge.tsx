@@ -22,20 +22,29 @@ export interface PlanUsage {
   price_usd: number
   plan_started_at: string | null
   plan_expires_at: string | null
+  scan_answer_day_limit: number
+  scan_answer_max_lines: number
+  scan_answer_today: number
 }
 
 const PLAN_COLORS: Record<string, string> = {
-  free:    '#64748b',
-  starter: '#0ea5e9',
-  pro:     '#8b5cf6',
-  admin:   '#f59e0b',
+  free:        '#64748b',
+  starter:     '#0ea5e9',
+  pro:         '#8b5cf6',
+  starter_sa:  '#6366f1',
+  pro_sa:      '#8b5cf6',
+  scan_answer: '#10b981',
+  admin:       '#f59e0b',
 }
 
 const PLAN_LABELS: Record<string, string> = {
-  free:    'Free',
-  starter: 'Starter',
-  pro:     'Pro',
-  admin:   'Admin ∞',
+  free:        'Free',
+  starter:     'Starter',
+  pro:         'Pro',
+  starter_sa:  'Starter + S&A',
+  pro_sa:      'Pro + S&A',
+  scan_answer: 'Scan & Answer',
+  admin:       'Admin ∞',
 }
 
 function Bar({ used, limit, color }: { used: number; limit: number; color: string }) {
@@ -134,11 +143,24 @@ export default function UsageBadge({ usage, compact = false }: { usage: PlanUsag
         </>
       )}
 
+      {/* Scan & Answer usage */}
+      {usage.scan_answer_day_limit > 0 && (
+        <>
+          <div style={s.row}>
+            <span style={s.label}>S&A today</span>
+            <span style={s.val}>{usage.scan_answer_today} / {usage.scan_answer_day_limit}</span>
+          </div>
+          <Bar used={usage.scan_answer_today} limit={usage.scan_answer_day_limit} color={color} />
+        </>
+      )}
+
       {/* Plan notes */}
       <div style={s.notes}>
         {!usage.ai_fix_allowed && <span style={s.note}>❌ AI Fix — upgrade to Starter</span>}
+        {usage.scan_answer_day_limit === 0 && <span style={s.note}>❌ Scan & Answer — add S&A plan</span>}
         {usage.max_lines_scan < 9999 && <span style={s.note}>✂ Top {usage.max_lines_scan} lines per scan</span>}
         {usage.sonnet_allowed && <span style={s.note}>✅ Sonnet for large files</span>}
+        {usage.scan_answer_day_limit > 0 && <span style={s.note}>✅ Scan & Answer ({usage.scan_answer_max_lines} lines)</span>}
       </div>
 
       {/* Proactive upgrade link for non-pro users */}

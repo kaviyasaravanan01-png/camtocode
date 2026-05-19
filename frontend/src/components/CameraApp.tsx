@@ -123,6 +123,20 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [saveModel,     setSaveModel]     = useState('haiku')
   const [saving,        setSaving]        = useState(false)
   const [pendingLang,   setPendingLang]   = useState('')
+  // Scan & Answer state
+  const [saMode,          setSaMode]          = useState(false)
+  const [saScanCount,     setSaScanCount]     = useState(0)
+  const [saLineCount,     setSaLineCount]     = useState(0)
+  const [saMaxLines,      setSaMaxLines]      = useState(0)
+  const [saAnswering,     setSaAnswering]     = useState(false)
+  const [saStreamText,    setSaStreamText]    = useState('')
+  const [saAnswerText,    setSaAnswerText]    = useState('')
+  const [saAnswerFilename,setSaAnswerFilename]= useState('')
+  const [saAnswerUrl,     setSaAnswerUrl]     = useState('')
+  const [saError,         setSaError]         = useState('')
+  const [showSaAnswer,    setShowSaAnswer]    = useState(false)
+  const saModeRef = useRef(false)
+
   // Auto re-capture state
   const [autoRecapture,         setAutoRecapture]         = useState(false)
   const [recaptureInterval,     setRecaptureInterval]     = useState(5)
@@ -145,6 +159,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   useEffect(() => { roiRef.current = roi }, [roi])
   useEffect(() => { showRoiRef.current = showRoi }, [showRoi])
   useEffect(() => { recaptureSeparatorRef.current = recaptureSeparator }, [recaptureSeparator])
+  useEffect(() => { saModeRef.current = saMode }, [saMode])
 
   const addLog = useCallback((msg: string) => {
     const ts = new Date().toLocaleTimeString()
@@ -474,6 +489,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         const ts  = new Date().toISOString().slice(0, 10).replace(/-/g, '')
         setSaveFilename(prev => prev || `${d.lang || 'code'}_${ts}${ext}`)
         setPendingLang(d.lang)
+        // Auto-append to Scan & Answer buffer when in S&A mode
+        if (saModeRef.current && d.text) {
+          sock.emit('sa_append', { text: d.text })
+        }
       })
 
       sock.on('auto_captured', () => {
@@ -501,6 +520,42 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('plan_usage', (d: PlanUsage) => setPlanUsage(d))
+
+      sock.on('sa_updated', (d: any) => {
+        setSaScanCount(d.scan_count)
+        setSaLineCount(d.line_count)
+        setSaMaxLines(d.max_lines)
+        addLog(`S&A: ${d.scan_count} scans, ${d.line_count}/${d.max_lines} lines`)
+      })
+      sock.on('sa_error', (d: any) => {
+        setSaError(d.msg)
+        setSaAnswering(false)
+        addLog('S&A error: ' + d.msg)
+      })
+      sock.on('sa_status', (d: any) => {
+        setStatusMsg(d.msg)
+        addLog('S&A status: ' + d.msg)
+      })
+      sock.on('sa_token', (d: any) => {
+        setSaStreamText(prev => prev + d.token)
+      })
+      sock.on('sa_done', (d: any) => {
+        setSaAnswering(false)
+        setSaAnswerText(d.answer)
+        setSaAnswerFilename(d.filename)
+        setSaAnswerUrl(d.download_url || '')
+        setSaStreamText('')
+        setShowSaAnswer(true)
+        setStatusMsg('Answer ready: ' + d.filename)
+        addLog('S&A done: ' + d.filename)
+        sock.emit('get_plan_usage')
+      })
+      sock.on('sa_cleared', () => {
+        setSaScanCount(0)
+        setSaLineCount(0)
+        setSaError('')
+        addLog('S&A session cleared')
+      })
 
       sock.on('recapture_countdown', (d: { remaining: number; total: number }) => {
         setRecaptureCountdown(d.remaining)
@@ -672,6 +727,28 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     setRecaptureCountdown(0)
     setRecapturePaused(false)
     setRecaptureSessionActive(false)
+  }
+
+  const handleSaModeToggle = () => {
+    const next = !saMode
+    setSaMode(next)
+    saModeRef.current = next
+    if (!next) {
+      // Clear session when turning off
+      emit('sa_clear')
+      setSaScanCount(0); setSaLineCount(0); setSaError('')
+    }
+  }
+  const handleStopAndAnswer = () => {
+    if (saAnswering) return
+    setSaAnswering(true)
+    setSaError('')
+    setSaStreamText('')
+    emit('sa_stop_and_answer')
+  }
+  const handleSaClear = () => {
+    emit('sa_clear')
+    setSaScanCount(0); setSaLineCount(0); setSaError('')
   }
 
   const handleCopy = (text: string) => navigator.clipboard.writeText(text).then(() => setStatusMsg('Copied!'))
@@ -966,14 +1043,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         {!capturing ? (
           <>
             <button onClick={() => {
-              // If a countdown is running, stop it before starting fresh
               if (recaptureCountdown > 0 || recapturePaused) {
                 emit('pause_recapture')
                 setRecaptureCountdown(0)
                 setRecapturePaused(false)
               }
               setRecaptureSessionActive(false)
-              setFinalText('')
+              if (!saMode) setFinalText('')
               handleStart()
             }} disabled={socketStatus !== 'connected'}
               style={{ ...s.startBtn, opacity: socketStatus !== 'connected' ? 0.5 : 1 }}>
@@ -987,7 +1063,88 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         ) : (
           <button onClick={handleStop} style={s.stopBtn}>⏹ Stop</button>
         )}
+        {/* Scan & Answer mode toggle */}
+        <button
+          onClick={handleSaModeToggle}
+          style={{
+            ...s.photoBtn,
+            background: saMode ? 'rgba(16,185,129,0.25)' : 'rgba(255,255,255,0.08)',
+            borderColor: saMode ? 'rgba(16,185,129,0.6)' : 'rgba(255,255,255,0.15)',
+            color: saMode ? '#34d399' : '#e2e8f0',
+            fontWeight: saMode ? 700 : 500,
+          }}
+          title="Toggle Scan & Answer mode — scans are accumulated and answered by AI"
+        >
+          🧠 {saMode ? 'S&A On' : 'S&A'}
+        </button>
       </div>
+
+      {/* Scan & Answer panel */}
+      {saMode && (
+        <div style={{
+          margin: '0 0.75rem',
+          background: 'rgba(16,185,129,0.08)',
+          border: '1px solid rgba(16,185,129,0.3)',
+          borderRadius: 12,
+          padding: '0.75rem 1rem',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: '0.8rem', color: '#34d399', fontWeight: 700 }}>🧠 Scan & Answer</span>
+              {saScanCount > 0 && (
+                <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.55)', background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '1px 8px' }}>
+                  {saScanCount} scan{saScanCount !== 1 ? 's' : ''} · {saLineCount}/{saMaxLines || (planUsage?.scan_answer_max_lines ?? '?')} lines
+                </span>
+              )}
+              {saScanCount === 0 && (
+                <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
+                  Scan to add content, then click Stop & Answer
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {saScanCount > 0 && !saAnswering && (
+                <button onClick={handleSaClear} style={{
+                  background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)',
+                  color: '#e2e8f0', borderRadius: 7, padding: '0.25rem 0.7rem', fontSize: '0.75rem', cursor: 'pointer',
+                }}>Clear</button>
+              )}
+              <button
+                onClick={handleStopAndAnswer}
+                disabled={saScanCount === 0 || saAnswering}
+                style={{
+                  background: saScanCount === 0 || saAnswering ? 'rgba(16,185,129,0.2)' : 'linear-gradient(135deg,#10b981,#059669)',
+                  border: 'none', color: '#fff', borderRadius: 8,
+                  padding: '0.35rem 0.85rem', fontSize: '0.8rem', fontWeight: 700,
+                  cursor: saScanCount === 0 || saAnswering ? 'not-allowed' : 'pointer',
+                  opacity: saScanCount === 0 ? 0.5 : 1,
+                }}
+              >
+                {saAnswering ? '⏳ Answering...' : '✅ Stop & Answer'}
+              </button>
+            </div>
+          </div>
+          {saError && (
+            <div style={{ marginTop: 6, fontSize: '0.75rem', color: '#fca5a5', background: 'rgba(239,68,68,0.1)', borderRadius: 6, padding: '4px 8px' }}>
+              ⚠ {saError}
+              {saError.includes('not included') && (
+                <a href="/account" style={{ color: '#818cf8', marginLeft: 8, textDecoration: 'none' }}>Upgrade →</a>
+              )}
+            </div>
+          )}
+          {saAnswering && saStreamText && (
+            <div style={{ marginTop: 8, fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace', maxHeight: 80, overflowY: 'auto' }}>
+              {saStreamText.slice(-300)}
+            </div>
+          )}
+          {/* Daily limit indicator */}
+          {planUsage && planUsage.scan_answer_day_limit > 0 && (
+            <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)' }}>
+              {planUsage.scan_answer_today}/{planUsage.scan_answer_day_limit} S&A used today · {planUsage.scan_answer_max_lines} line buffer
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Auto Re-capture Countdown Banner */}
       {recaptureCountdown > 0 && (
@@ -1173,6 +1330,43 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               <button onClick={() => handleSaveSubmit(saveAiEnabled && planUsage?.ai_fix_allowed !== false)} style={s.exportBtn} disabled={saving}>
                 {saving ? 'Saving...' : (saveAiEnabled && planUsage?.ai_fix_allowed !== false) ? '✨ Fix & Save' : 'Save'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Scan & Answer Result Modal */}
+      {showSaAnswer && (
+        <div style={s.backdrop} onClick={() => setShowSaAnswer(false)}>
+          <div style={{ ...s.modal, maxWidth: 680, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+              <h3 style={{ margin: 0, fontSize: '1rem', color: '#34d399' }}>🧠 Scan & Answer Result</h3>
+              <button onClick={() => setShowSaAnswer(false)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
+            </div>
+            <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem', margin: '0 0 0.75rem' }}>
+              {saAnswerFilename}
+            </p>
+            <div style={{
+              flex: 1, overflowY: 'auto', background: 'rgba(0,0,0,0.4)', borderRadius: 10,
+              border: '1px solid rgba(255,255,255,0.07)', padding: '0.75rem',
+              fontSize: '0.8rem', fontFamily: '"JetBrains Mono","Fira Code",Consolas,monospace',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: '#e2e8f0',
+              maxHeight: '55vh',
+            }}>
+              {saAnswerText || 'No answer generated.'}
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: '0.75rem', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => navigator.clipboard.writeText(saAnswerText).then(() => setStatusMsg('Answer copied!'))}
+                style={s.smallBtn}
+              >Copy Answer</button>
+              {saAnswerUrl && (
+                <a href={saAnswerUrl} download={saAnswerFilename} style={{ textDecoration: 'none' }}>
+                  <button style={{ ...s.smallBtn, color: '#34d399', borderColor: 'rgba(16,185,129,0.4)' }}>↓ Download</button>
+                </a>
+              )}
+              <button onClick={() => { setShowSaAnswer(false); setSaMode(false); saModeRef.current = false; emit('sa_clear'); setSaScanCount(0); setSaLineCount(0) }}
+                style={{ ...s.cancelBtn, marginLeft: 'auto' }}>Done</button>
             </div>
           </div>
         </div>

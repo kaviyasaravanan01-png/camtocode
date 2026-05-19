@@ -170,11 +170,58 @@ WHERE tablename = 'objects' AND schemaname = 'storage';
 camtocode/                       ← bucket
 ├── {user_uuid}/
 │   ├── live_buffer.txt          ← active capture session (overwritten each time)
-│   └── exports/
-│       ├── 20241215_143022_python_session1.py
-│       ├── 20241215_150300_javascript_session2.js
+│   ├── exports/
+│   │   ├── 20241215_143022_python_session1.py
+│   │   └── ...
+│   └── answers/                 ← Scan & Answer result files
+│       ├── answer_20241215_143022.md
 │       └── ...
 ```
 
-Files in `exports/` are permanent until the user deletes them.
+Files in `exports/` and `answers/` are permanent until the user deletes them.
 `live_buffer.txt` is a temporary scratchpad reset at each Start.
+
+---
+
+## 8. Scan & Answer Migration (add scan_answers column)
+
+If you already have the `daily_usage` table, run this migration to add S&A tracking:
+
+```sql
+-- Add scan_answers column to daily_usage (if table already exists)
+ALTER TABLE public.daily_usage
+  ADD COLUMN IF NOT EXISTS scan_answers integer NOT NULL DEFAULT 0;
+```
+
+If creating `daily_usage` from scratch, include it from the start:
+
+```sql
+CREATE TABLE IF NOT EXISTS public.daily_usage (
+    id           bigserial PRIMARY KEY,
+    user_id      uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    date         date NOT NULL,
+    scans        integer NOT NULL DEFAULT 0,
+    ai_scans     integer NOT NULL DEFAULT 0,
+    scan_answers integer NOT NULL DEFAULT 0,
+    UNIQUE (user_id, date)
+);
+
+ALTER TABLE public.daily_usage ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own daily_usage"
+    ON public.daily_usage FOR SELECT
+    USING (auth.uid() = user_id);
+
+-- Service role handles all writes (backend only)
+```
+
+## 9. New Plan Types
+
+The following plan keys are now valid in `user_plans.plan`:
+- `starter` — existing, no Scan & Answer
+- `pro` — existing, no Scan & Answer
+- `starter_sa` — Starter + Scan & Answer (₹849/month)
+- `pro_sa` — Pro + Scan & Answer (₹1,999/month)
+- `scan_answer` — Scan & Answer only (₹399/month)
+- `free` — free tier (1 S&A/day, 10-line limit)
+- `admin` — internal unlimited

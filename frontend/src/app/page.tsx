@@ -6,7 +6,9 @@ import PayButton from '@/components/PayButton'
 const PLANS = [
   {
     name: 'Free',
+    planKey: null,
     price: '$0',
+    inr: '',
     period: 'forever',
     color: '#64748b',
     features: [
@@ -16,6 +18,7 @@ const PLANS = [
       'Top 100 lines per scan',
       '10 saved files',
       'Tesseract fallback OCR',
+      '1 Scan & Answer / day (10-line limit)',
       'No AI Fix (upgrade to unlock)',
     ],
     cta: 'Get Started Free',
@@ -23,7 +26,9 @@ const PLANS = [
   },
   {
     name: 'Starter',
+    planKey: 'starter',
     price: '$7',
+    inr: '₹599',
     period: 'per month',
     color: '#0ea5e9',
     features: [
@@ -34,13 +39,16 @@ const PLANS = [
       '500 saved files',
       '120K fix token budget',
       'Files split into parts if large',
+      'No Scan & Answer (add below)',
     ],
     cta: 'Start Starter',
     highlight: false,
   },
   {
     name: 'Pro',
+    planKey: 'pro',
     price: '$18',
+    inr: '₹1,499',
     period: 'per month',
     color: '#8b5cf6',
     features: [
@@ -52,9 +60,67 @@ const PLANS = [
       '900K fix token budget',
       'Claude Sonnet for large files',
       'Large files auto-merged into one',
+      'No Scan & Answer (add below)',
     ],
     cta: 'Go Pro',
     highlight: true,
+  },
+]
+
+const SA_PLANS = [
+  {
+    name: 'S&A Only',
+    planKey: 'scan_answer',
+    price: '$5',
+    inr: '₹399',
+    color: '#10b981',
+    features: [
+      '20 Scan & Answer / day',
+      '200-line buffer per session',
+      '30 AI scans / day (for S&A)',
+      '100 answer files saved',
+      'Answers code, MCQs, incomplete code',
+      'Saves answer file automatically',
+      'No AI Fix feature',
+    ],
+    cta: 'Buy S&A Only',
+    highlight: false,
+  },
+  {
+    name: 'Starter + S&A',
+    planKey: 'starter_sa',
+    price: '$10',
+    inr: '₹849',
+    color: '#6366f1',
+    features: [
+      'Everything in Starter, plus:',
+      '20 Scan & Answer / day',
+      '300-line buffer per session',
+      'AI answers code, MCQs & more',
+      'Answer files saved to cloud',
+      '500 total saved files',
+      '15 AI Fix requests / month',
+    ],
+    cta: 'Get Starter + S&A',
+    highlight: true,
+  },
+  {
+    name: 'Pro + S&A',
+    planKey: 'pro_sa',
+    price: '$24',
+    inr: '₹1,999',
+    color: '#8b5cf6',
+    features: [
+      'Everything in Pro, plus:',
+      '50 Scan & Answer / day',
+      '1,000-line buffer per session',
+      'Claude Sonnet for complex files',
+      'AI answers code, MCQs & more',
+      'Answer files saved to cloud',
+      '1,000 total saved files',
+    ],
+    cta: 'Get Pro + S&A',
+    highlight: false,
   },
 ]
 
@@ -100,6 +166,11 @@ const FEATURES = [
     icon: '🤖',
     title: 'Claude Vision OCR',
     desc: 'Powered by Anthropic Claude — far more accurate than traditional Tesseract OCR, especially for dense code.',
+  },
+  {
+    icon: '🧠',
+    title: 'Scan & Answer',
+    desc: 'Accumulate multiple scans, then let AI analyze the content — answers MCQs, completes code, solves problems. Saved as a file.',
   },
   {
     icon: '🔧',
@@ -155,8 +226,16 @@ const FAQ = [
     a: 'You will see a clear message explaining which limit was reached. Your existing saved files are never affected. Upgrade or wait for the limit to reset.',
   },
   {
+    q: 'What is Scan & Answer?',
+    a: 'Scan & Answer lets you scan multiple pieces of content (MCQs, incomplete code, problems) and then ask the AI to answer everything at once. The answer is saved as a Markdown file you can open and download. Free users get 1/day with a 10-line limit. Paid S&A plans get 20–50/day.',
+  },
+  {
+    q: 'Can I buy Scan & Answer without a core scanning plan?',
+    a: 'Yes — the "S&A Only" plan (₹399/month) gives you Scan & Answer with basic scanning specifically for S&A sessions. If you want full code extraction + AI Fix + S&A, choose Starter+S&A (₹849) or Pro+S&A (₹1,999).',
+  },
+  {
     q: 'When will Razorpay / payment be available?',
-    a: 'Razorpay payments are live now for Starter ($7/mo) and Pro ($18/mo) plans. Click "Upgrade" on any plan card or visit your Account page after signing in. International payments via Stripe are coming soon.',
+    a: 'Razorpay payments are live now for all plans including Scan & Answer bundles. Click any plan\'s "Buy" button or visit your Account page after signing in. International payments via Stripe are coming soon.',
   },
   {
     q: 'Is my data safe?',
@@ -283,8 +362,11 @@ export default function LandingPage() {
           <p style={s.sectionTag}>Simple Pricing</p>
           <h2 style={s.sectionTitle}>Plans for Every Need</h2>
           <p style={s.sectionSub}>
-            All prices in USD. Cancel anytime. No hidden fees.
+            All prices in USD (billed in INR via Razorpay). Cancel anytime. No hidden fees.
           </p>
+
+          {/* Base plans */}
+          <p style={{ ...s.sectionTag, marginBottom: '1rem' }}>Core Plans — Code Scanning</p>
           <div style={s.plansGrid}>
             {PLANS.map(plan => (
               <div
@@ -303,20 +385,30 @@ export default function LandingPage() {
                   <span style={s.planPriceNum}>{plan.price}</span>
                   <span style={s.planPricePeriod}>/{plan.period}</span>
                 </div>
+                {plan.inr && (
+                  <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.35)', margin: '-0.8rem 0 0.9rem' }}>
+                    {plan.inr}/month
+                  </p>
+                )}
                 <ul style={s.planFeatures}>
                   {plan.features.map(f => (
-                    <li key={f} style={s.planFeature}>
-                      <span style={{ color: plan.color, marginRight: 8 }}>✓</span>{f}
+                    <li key={f} style={{
+                      ...s.planFeature,
+                      color: f.startsWith('No ') ? 'rgba(255,255,255,0.35)' : undefined,
+                    }}>
+                      <span style={{ color: f.startsWith('No ') ? 'rgba(255,255,255,0.2)' : plan.color, marginRight: 8 }}>
+                        {f.startsWith('No ') ? '–' : '✓'}
+                      </span>{f}
                     </li>
                   ))}
                 </ul>
-                {plan.name === 'Free' ? (
+                {plan.planKey === null ? (
                   <Link href="/login" style={{ ...s.planCta, background: 'rgba(255,255,255,0.08)', textDecoration: 'none' }}>
                     {plan.cta}
                   </Link>
                 ) : (
                   <PayButton
-                    plan={plan.name.toLowerCase() as 'starter' | 'pro'}
+                    plan={plan.planKey as any}
                     label={plan.cta}
                     style={{ background: plan.highlight ? `linear-gradient(135deg,${plan.color},${plan.color}cc)` : undefined }}
                   />
@@ -325,8 +417,61 @@ export default function LandingPage() {
             ))}
           </div>
 
+          {/* Scan & Answer plans */}
+          <div style={{ marginTop: '3rem' }}>
+            <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+              <span style={s.sectionTag}>Optional Feature</span>
+              <h3 style={{ ...s.sectionTitle, fontSize: 'clamp(1.2rem,2.5vw,1.7rem)', marginTop: '0.5rem' }}>
+                🧠 Scan & Answer — Add AI Understanding
+              </h3>
+              <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.92rem', maxWidth: 580, margin: '0 auto 0.5rem', lineHeight: 1.65 }}>
+                Scan MCQs, incomplete code, or any problem — AI reads all your scans and generates a
+                complete answer, saved as a file you can open instantly.
+              </p>
+              <p style={{ color: 'rgba(255,255,255,0.35)', fontSize: '0.78rem' }}>
+                Buy standalone or bundled with a core plan. Free users get 1/day with a 10-line limit.
+              </p>
+            </div>
+            <div style={s.plansGrid}>
+              {SA_PLANS.map(plan => (
+                <div
+                  key={plan.name}
+                  style={{
+                    ...s.planCard,
+                    borderColor: plan.highlight ? plan.color : 'rgba(255,255,255,0.1)',
+                    boxShadow: plan.highlight ? `0 0 40px ${plan.color}33` : undefined,
+                  }}
+                >
+                  {plan.highlight && (
+                    <div style={{ ...s.popularBadge, background: plan.color }}>Best Value</div>
+                  )}
+                  <div style={{ ...s.planChip, background: plan.color }}>{plan.name}</div>
+                  <div style={s.planPrice}>
+                    <span style={s.planPriceNum}>{plan.price}</span>
+                    <span style={s.planPricePeriod}>/month</span>
+                  </div>
+                  <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.35)', margin: '-0.8rem 0 0.9rem' }}>
+                    {plan.inr}/month
+                  </p>
+                  <ul style={s.planFeatures}>
+                    {plan.features.map(f => (
+                      <li key={f} style={s.planFeature}>
+                        <span style={{ color: plan.color, marginRight: 8 }}>✓</span>{f}
+                      </li>
+                    ))}
+                  </ul>
+                  <PayButton
+                    plan={plan.planKey as any}
+                    label={plan.cta}
+                    style={{ background: plan.highlight ? `linear-gradient(135deg,${plan.color},${plan.color}cc)` : undefined }}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
           {/* Add-ons */}
-          <div style={s.addonsWrap}>
+          <div style={{ ...s.addonsWrap, marginTop: '2.5rem' }}>
             <h3 style={s.addonsTitle}>Add-On Packs (coming soon)</h3>
             <p style={s.addonsSub}>Need more? Top up without upgrading your plan.</p>
             <div style={s.addonsGrid}>

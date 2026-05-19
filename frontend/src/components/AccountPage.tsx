@@ -7,16 +7,23 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:500
 const SUPPORT_EMAIL = 'anandanathurelangovan94@gmail.com'
 
 const PLAN_COLOR: Record<string, string> = {
-  free: '#64748b', starter: '#0ea5e9', pro: '#8b5cf6', admin: '#f59e0b',
+  free: '#64748b', starter: '#0ea5e9', pro: '#8b5cf6',
+  starter_sa: '#6366f1', pro_sa: '#8b5cf6', scan_answer: '#10b981',
+  admin: '#f59e0b',
 }
 const PLAN_LABEL: Record<string, string> = {
-  free: 'Free', starter: 'Starter', pro: 'Pro', admin: 'Admin',
+  free: 'Free', starter: 'Starter', pro: 'Pro',
+  starter_sa: 'Starter + S&A', pro_sa: 'Pro + S&A', scan_answer: 'Scan & Answer',
+  admin: 'Admin',
 }
 const PLAN_FEATURES: Record<string, string[]> = {
-  free:    ['3 AI scans/day', '20 scans/day', '200 scans/month', 'Top 100 lines per scan', '10 saved files', 'No AI Fix'],
-  starter: ['200 AI scans/day', '6,000 scans/month', '15 AI fixes/month', 'Top 300 lines per scan', '500 saved files'],
-  pro:     ['500 AI scans/day', '15,000 scans/month', '75 AI fixes/month', 'Top 1,000 lines per scan', '1,000 saved files', 'Claude Sonnet for large files'],
-  admin:   ['Unlimited everything', 'Claude Sonnet enabled', 'No limits'],
+  free:        ['3 AI scans/day', '20 scans/day', '200/month', 'Top 100 lines', '10 saved files', '1 S&A/day (10 lines)', 'No AI Fix'],
+  starter:     ['200 AI scans/day', '6,000 scans/month', '15 AI fixes/month', 'Top 300 lines', '500 saved files', 'No Scan & Answer'],
+  pro:         ['500 AI scans/day', '15,000 scans/month', '75 AI fixes/month', 'Top 1,000 lines', '1,000 saved files', 'Sonnet for large files', 'No Scan & Answer'],
+  starter_sa:  ['200 AI scans/day', '6,000 scans/month', '15 AI fixes/month', 'Top 300 lines', '500 saved files', '20 Scan & Answer/day', '300-line S&A buffer'],
+  pro_sa:      ['500 AI scans/day', '15,000 scans/month', '75 AI fixes/month', 'Top 1,000 lines', '1,000 saved files', 'Sonnet for large files', '50 Scan & Answer/day', '1,000-line S&A buffer'],
+  scan_answer: ['20 AI scans/day (S&A only)', '30 scans/day', '20 Scan & Answer/day', '200-line S&A buffer', '100 answer files', 'No AI Fix'],
+  admin:       ['Unlimited everything', 'Claude Sonnet enabled', 'No limits'],
 }
 
 interface PlanData {
@@ -41,6 +48,9 @@ interface PlanData {
   max_lines_scan: number
   save_allowed: boolean
   ai_fix_allowed: boolean
+  scan_answer_day_limit: number
+  scan_answer_max_lines: number
+  scan_answer_today: number
 }
 
 interface Payment {
@@ -231,6 +241,9 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
                 {data.max_files > 0 && (
                   <StatRow label="Files saved" used={data.files_saved} limit={data.max_files} color={color} />
                 )}
+                {data.scan_answer_day_limit > 0 && (
+                  <StatRow label="Scan & Answer today" used={data.scan_answer_today} limit={data.scan_answer_day_limit} color="#10b981" />
+                )}
               </div>
 
               {/* Token detail */}
@@ -249,18 +262,24 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
                 <span style={s.noteItem}>✂ Max {data.max_lines_scan.toLocaleString()} lines per scan</span>
                 {data.sonnet_allowed && <span style={s.noteItem}>✅ Claude Sonnet enabled for large files</span>}
                 {!data.ai_fix_allowed && <span style={{ ...s.noteItem, color: '#f87171' }}>❌ AI Fix not available on Free plan</span>}
+                {data.scan_answer_day_limit > 0
+                  ? <span style={{ ...s.noteItem, color: '#34d399' }}>🧠 Scan & Answer: {data.scan_answer_max_lines}-line buffer</span>
+                  : <span style={{ ...s.noteItem, color: '#f87171' }}>❌ Scan & Answer — add S&A plan to unlock</span>
+                }
               </div>
             </section>
           )}
 
           {/* ── Upgrade section ───────────────────────────────────────── */}
-          {(plan === 'free' || plan === 'starter') && (
+          {(plan === 'free' || plan === 'starter' || plan === 'pro') && (
             <section style={s.card}>
               <h2 style={s.sectionTitle}>Upgrade Your Plan</h2>
               <p style={s.sectionSub}>
                 {plan === 'free'
                   ? 'Unlock AI Fix, more scans, and cloud file storage with Starter or Pro.'
-                  : 'Go Pro for 5× more scans, 5× more files, and Claude Sonnet for large files.'}
+                  : plan === 'starter'
+                  ? 'Go Pro for 5× more scans, 5× more files, and Claude Sonnet. Or add Scan & Answer to your current plan.'
+                  : 'Add Scan & Answer to unlock AI-powered question answering on your scans.'}
               </p>
               <div style={s.upgradeGrid}>
                 {plan === 'free' && (
@@ -272,21 +291,58 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
                     <ul style={s.featureList}>
                       {PLAN_FEATURES.starter.map(f => <li key={f} style={s.featureItem}><span style={{ color: PLAN_COLOR.starter }}>✓</span> {f}</li>)}
                     </ul>
-                    <PayButton plan="starter" label="Upgrade to Starter" />
+                    <PayButton plan="starter" label="Upgrade to Starter — ₹599/mo" />
                   </div>
                 )}
-                <div style={{ ...s.upgradeCard, borderColor: PLAN_COLOR.pro, boxShadow: `0 0 30px ${PLAN_COLOR.pro}22` }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ ...s.planBadge, background: PLAN_COLOR.pro }}>Pro</span>
-                      <span style={{ background: PLAN_COLOR.pro, color: '#fff', borderRadius: 10, padding: '1px 8px', fontSize: '0.65rem', fontWeight: 700 }}>Most Popular</span>
+                {(plan === 'free' || plan === 'starter') && (
+                  <div style={{ ...s.upgradeCard, borderColor: PLAN_COLOR.pro, boxShadow: `0 0 30px ${PLAN_COLOR.pro}22` }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ ...s.planBadge, background: PLAN_COLOR.pro }}>Pro</span>
+                        <span style={{ background: PLAN_COLOR.pro, color: '#fff', borderRadius: 10, padding: '1px 8px', fontSize: '0.65rem', fontWeight: 700 }}>Most Popular</span>
+                      </div>
+                      <span style={s.upgradePrice}>$18<span style={s.perMonth}>/mo</span></span>
                     </div>
-                    <span style={s.upgradePrice}>$18<span style={s.perMonth}>/mo</span></span>
+                    <ul style={s.featureList}>
+                      {PLAN_FEATURES.pro.map(f => <li key={f} style={s.featureItem}><span style={{ color: PLAN_COLOR.pro }}>✓</span> {f}</li>)}
+                    </ul>
+                    <PayButton plan="pro" label="Upgrade to Pro — ₹1,499/mo" />
                   </div>
-                  <ul style={s.featureList}>
-                    {PLAN_FEATURES.pro.map(f => <li key={f} style={s.featureItem}><span style={{ color: PLAN_COLOR.pro }}>✓</span> {f}</li>)}
-                  </ul>
-                  <PayButton plan="pro" label="Upgrade to Pro" />
+                )}
+              </div>
+
+              {/* Scan & Answer upgrade options */}
+              <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+                <p style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.55)', marginBottom: 12 }}>
+                  🧠 <strong style={{ color: '#34d399' }}>Add Scan & Answer</strong> — AI answers MCQs, incomplete code, and problems from your scans
+                </p>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  {(plan === 'free' || plan === 'starter') && (
+                    <div style={{ flex: '1 1 200px', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.25)', borderRadius: 12, padding: '1rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ ...s.planBadge, background: PLAN_COLOR.starter_sa }}>Starter + S&A</span>
+                        <span style={{ fontWeight: 800, fontSize: '1.1rem', color: '#f1f5f9' }}>$10<span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>/mo</span></span>
+                      </div>
+                      <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: 10 }}>20 S&A/day · 300-line buffer</p>
+                      <PayButton plan="starter_sa" label="Get Starter + S&A — ₹849/mo" />
+                    </div>
+                  )}
+                  <div style={{ flex: '1 1 200px', background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.25)', borderRadius: 12, padding: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ ...s.planBadge, background: PLAN_COLOR.pro_sa }}>Pro + S&A</span>
+                      <span style={{ fontWeight: 800, fontSize: '1.1rem', color: '#f1f5f9' }}>$24<span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>/mo</span></span>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: 10 }}>50 S&A/day · 1,000-line buffer</p>
+                    <PayButton plan="pro_sa" label="Get Pro + S&A — ₹1,999/mo" />
+                  </div>
+                  <div style={{ flex: '1 1 200px', background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.25)', borderRadius: 12, padding: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                      <span style={{ ...s.planBadge, background: PLAN_COLOR.scan_answer }}>S&A Only</span>
+                      <span style={{ fontWeight: 800, fontSize: '1.1rem', color: '#f1f5f9' }}>$5<span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>/mo</span></span>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', marginBottom: 10 }}>20 S&A/day · standalone</p>
+                    <PayButton plan="scan_answer" label="Get S&A Only — ₹399/mo" />
+                  </div>
                 </div>
               </div>
             </section>

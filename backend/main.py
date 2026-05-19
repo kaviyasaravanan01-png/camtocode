@@ -53,8 +53,11 @@ RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
 
 # Plan prices in INR paise (1 INR = 100 paise)
 PLAN_PRICES_INR: dict[str, int] = {
-    "starter": 59900,    # ₹599  ≈ $7
-    "pro":     149900,   # ₹1499 ≈ $18
+    "starter":     59900,   # ₹599  ≈ $7   (no Scan & Answer)
+    "pro":        149900,   # ₹1,499 ≈ $18  (no Scan & Answer)
+    "starter_sa":  84900,   # ₹849  ≈ $10   (Starter + Scan & Answer, 20/day)
+    "pro_sa":     199900,   # ₹1,999 ≈ $24  (Pro + Scan & Answer, 50/day)
+    "scan_answer": 39900,   # ₹399  ≈ $5   (Scan & Answer only, 20/day)
 }
 
 # ---------------------------------------------------------------------------
@@ -74,67 +77,129 @@ VISION_OCR_MODEL = "claude-haiku-4-5-20251001"
 PLANS: dict[str, dict] = {
     # ── Free ──────────────────────────────────────────────────────────────
     "free": {
-        "price_usd":         0,          # $0/month
-        "scans_day":        20,
-        "ai_scans_day":      3,   # Vision OCR scans per day
-        "scans_month":     200,
-        "ai_fixes_month":    0,   # full-file AI fix disabled
-        "max_lines_scan":  100,   # truncate before Claude per scan
-        "max_lines_fix":     0,
-        "fix_token_cap":     0,
-        "fix_token_budget":  0,
-        "sonnet_allowed":  False,
-        "sonnet_budget":     0,
-        "save_allowed":    True,
-        "max_files":        10,
+        "price_usd":              0,
+        "scans_day":             20,
+        "ai_scans_day":           3,
+        "scans_month":          200,
+        "ai_fixes_month":         0,
+        "max_lines_scan":       100,
+        "max_lines_fix":          0,
+        "fix_token_cap":          0,
+        "fix_token_budget":       0,
+        "sonnet_allowed":      False,
+        "sonnet_budget":          0,
+        "save_allowed":        True,
+        "max_files":             10,
+        "scan_answer_day":        1,   # 1 Scan & Answer per day
+        "scan_answer_max_lines": 10,   # max 10 lines in buffer
     },
-    # ── Starter ($7/month) ───────────────────────────────────────────────
+    # ── Starter ($7/month, no Scan & Answer) ─────────────────────────────
     "starter": {
-        "price_usd":         7,          # $7/month
-        "scans_day":       200,
-        "ai_scans_day":    200,
-        "scans_month":    6000,
-        "ai_fixes_month":   15,
-        "max_lines_scan":  300,
-        "max_lines_fix":   300,
-        "fix_token_cap":  8_000,
-        "fix_token_budget": 120_000,   # 15 × 8 000
-        "sonnet_allowed":  False,
-        "sonnet_budget":     0,
-        "save_allowed":    True,
-        "max_files":       500,
+        "price_usd":              7,
+        "scans_day":            200,
+        "ai_scans_day":         200,
+        "scans_month":         6000,
+        "ai_fixes_month":        15,
+        "max_lines_scan":       300,
+        "max_lines_fix":        300,
+        "fix_token_cap":      8_000,
+        "fix_token_budget":  120_000,
+        "sonnet_allowed":      False,
+        "sonnet_budget":          0,
+        "save_allowed":        True,
+        "max_files":            500,
+        "scan_answer_day":        0,   # not included — upgrade to starter_sa
+        "scan_answer_max_lines":  0,
     },
-    # ── Pro ($18/month) ──────────────────────────────────────────────────
+    # ── Pro ($18/month, no Scan & Answer) ────────────────────────────────
     "pro": {
-        "price_usd":        18,          # $18/month
-        "scans_day":        500,
-        "ai_scans_day":     500,
-        "scans_month":   15_000,
-        "ai_fixes_month":    75,
-        "max_lines_scan":  1000,
-        "max_lines_fix":   1000,
-        "fix_token_cap":  12_000,
-        "fix_token_budget": 900_000,   # 75 × 12 000
-        "sonnet_allowed":   True,
-        "sonnet_budget":  500_000,     # hard monthly Sonnet token cap
-        "save_allowed":    True,
-        "max_files":      1000,
+        "price_usd":             18,
+        "scans_day":            500,
+        "ai_scans_day":         500,
+        "scans_month":       15_000,
+        "ai_fixes_month":        75,
+        "max_lines_scan":      1000,
+        "max_lines_fix":       1000,
+        "fix_token_cap":     12_000,
+        "fix_token_budget":  900_000,
+        "sonnet_allowed":       True,
+        "sonnet_budget":     500_000,
+        "save_allowed":        True,
+        "max_files":           1000,
+        "scan_answer_day":        0,   # not included — upgrade to pro_sa
+        "scan_answer_max_lines":  0,
+    },
+    # ── Starter + Scan & Answer ($10/month) ──────────────────────────────
+    "starter_sa": {
+        "price_usd":             10,
+        "scans_day":            200,
+        "ai_scans_day":         200,
+        "scans_month":         6000,
+        "ai_fixes_month":        15,
+        "max_lines_scan":       300,
+        "max_lines_fix":        300,
+        "fix_token_cap":      8_000,
+        "fix_token_budget":  120_000,
+        "sonnet_allowed":      False,
+        "sonnet_budget":          0,
+        "save_allowed":        True,
+        "max_files":            500,
+        "scan_answer_day":       20,   # 20 S&A answers per day
+        "scan_answer_max_lines": 300,  # max 300 lines in S&A buffer
+    },
+    # ── Pro + Scan & Answer ($24/month) ──────────────────────────────────
+    "pro_sa": {
+        "price_usd":             24,
+        "scans_day":            500,
+        "ai_scans_day":         500,
+        "scans_month":       15_000,
+        "ai_fixes_month":        75,
+        "max_lines_scan":      1000,
+        "max_lines_fix":       1000,
+        "fix_token_cap":     12_000,
+        "fix_token_budget":  900_000,
+        "sonnet_allowed":       True,
+        "sonnet_budget":     500_000,
+        "save_allowed":        True,
+        "max_files":           1000,
+        "scan_answer_day":       50,   # 50 S&A answers per day
+        "scan_answer_max_lines":1000,  # max 1 000 lines in S&A buffer
+    },
+    # ── Scan & Answer only ($5/month) ────────────────────────────────────
+    "scan_answer": {
+        "price_usd":              5,
+        "scans_day":             30,   # limited scanning (just enough for S&A)
+        "ai_scans_day":          20,
+        "scans_month":          600,
+        "ai_fixes_month":         0,
+        "max_lines_scan":       200,
+        "max_lines_fix":          0,
+        "fix_token_cap":          0,
+        "fix_token_budget":       0,
+        "sonnet_allowed":      False,
+        "sonnet_budget":          0,
+        "save_allowed":        True,
+        "max_files":            100,
+        "scan_answer_day":       20,   # 20 S&A answers per day
+        "scan_answer_max_lines": 200,
     },
     # ── Admin (unlimited) ────────────────────────────────────────────────
     "admin": {
-        "price_usd":         0,          # internal — no charge
-        "scans_day":     999_999,
-        "ai_scans_day":  999_999,
-        "scans_month":   999_999,
-        "ai_fixes_month":999_999,
-        "max_lines_scan":999_999,
-        "max_lines_fix": 999_999,
-        "fix_token_cap": 999_999,
+        "price_usd":              0,
+        "scans_day":        999_999,
+        "ai_scans_day":     999_999,
+        "scans_month":      999_999,
+        "ai_fixes_month":   999_999,
+        "max_lines_scan":   999_999,
+        "max_lines_fix":    999_999,
+        "fix_token_cap":    999_999,
         "fix_token_budget": 999_999_999,
-        "sonnet_allowed":  True,
-        "sonnet_budget": 999_999_999,
-        "save_allowed":    True,
-        "max_files":     999_999,
+        "sonnet_allowed":      True,
+        "sonnet_budget":    999_999_999,
+        "save_allowed":        True,
+        "max_files":        999_999,
+        "scan_answer_day":  999_999,
+        "scan_answer_max_lines": 999_999,
     },
 }
 
@@ -256,6 +321,7 @@ class UserSession:
         self.usage_month_sonnet_fix_tok = 0
         self.usage_month_ai_fixes       = 0
         self.usage_files_saved          = 0
+        self.usage_today_sa             = 0
         self.usage_loaded_at            = 0.0   # epoch when cache was last refreshed
         self.plan_started_at: str | None = None  # ISO timestamp when current plan started
         self.plan_expires_at: str | None = None  # ISO timestamp when plan expires (None = never)
@@ -268,6 +334,9 @@ class UserSession:
 
 _sessions: dict[str, UserSession] = {}
 _sessions_lock = threading.Lock()
+
+# Per-user Scan & Answer session buffers (in-memory)
+_sa_sessions: dict[str, dict] = {}
 
 def get_session(sid: str) -> UserSession:
     with _sessions_lock:
@@ -478,7 +547,7 @@ def db_upsert_plan(user_id: str, plan: str, set_started_at: bool = False) -> Non
         if set_started_at:
             now_dt = datetime.now(timezone.utc)
             data["plan_started_at"] = now_dt.isoformat()
-            if plan in ("starter", "pro"):
+            if plan in ("starter", "pro", "starter_sa", "pro_sa", "scan_answer"):
                 data["plan_expires_at"] = (now_dt + timedelta(days=30)).isoformat()
             else:
                 data["plan_expires_at"] = None   # free / admin never expire
@@ -588,6 +657,28 @@ def db_inc_monthly(
     except Exception:
         pass
 
+def db_inc_sa_daily(user_id: str) -> None:
+    """Increment scan_answers counter in daily_usage (get-then-upsert)."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
+        return
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        resp = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/daily_usage?user_id=eq.{user_id}&date=eq.{date_str}&select=scan_answers",
+            headers=_rest_hdr(), timeout=5,
+        )
+        current = 0
+        if resp.status_code == 200 and resp.json():
+            current = resp.json()[0].get("scan_answers", 0) or 0
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/daily_usage",
+            json={"user_id": user_id, "date": date_str, "scan_answers": current + 1},
+            headers={**_rest_hdr(), "Prefer": "resolution=merge-duplicates"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
 def db_reset_usage_on_expiry(user_id: str) -> None:
     """Reset scan/fix counters when a paid plan expires and downgrades to free.
     Deletes the daily row (so reads return 0) and zeroes monthly scan/fix
@@ -671,6 +762,7 @@ def load_user_plan_usage(sess: "UserSession") -> None:
 
     sess.usage_today_scans          = daily.get("scans",            0)
     sess.usage_today_ai_scans       = daily.get("ai_scans",         0)
+    sess.usage_today_sa             = daily.get("scan_answers",     0)
     sess.usage_month_scans          = monthly.get("scans",           0)
     sess.usage_month_haiku_fix_tok  = monthly.get("haiku_fix_tokens",0)
     sess.usage_month_sonnet_fix_tok = monthly.get("sonnet_fix_tokens",0)
@@ -811,9 +903,12 @@ def plan_usage_payload(sess: "UserSession") -> dict:
         "max_lines_scan":    lim.get("max_lines_scan", 0),
         "save_allowed":      lim.get("save_allowed", True),
         "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
-        "price_usd":         lim.get("price_usd", 0),
-        "plan_started_at":   sess.plan_started_at,
-        "plan_expires_at":   sess.plan_expires_at,
+        "price_usd":              lim.get("price_usd", 0),
+        "plan_started_at":        sess.plan_started_at,
+        "plan_expires_at":        sess.plan_expires_at,
+        "scan_answer_day_limit":  lim.get("scan_answer_day", 0),
+        "scan_answer_max_lines":  lim.get("scan_answer_max_lines", 0),
+        "scan_answer_today":      sess.usage_today_sa,
     }
 
 # ---------------------------------------------------------------------------
@@ -2613,6 +2708,165 @@ def on_get_plan_usage():
 
 
 # ---------------------------------------------------------------------------
+# Scan & Answer socket events
+# ---------------------------------------------------------------------------
+
+@socketio.on("sa_append")
+def on_sa_append(data):
+    """Append scanned text to the user's S&A session buffer."""
+    sess = get_session(request.sid)
+    if not sess.user_id:
+        emit("sa_error", {"msg": "Not authenticated"})
+        return
+
+    text = (data or {}).get("text", "").strip()
+    if not text:
+        return
+
+    lim = sess.plan_limits
+    max_lines = lim.get("scan_answer_max_lines", 0)
+    if _is_admin(sess):
+        max_lines = 999_999
+
+    if max_lines == 0:
+        emit("sa_error", {"msg": "Scan & Answer is not included in your current plan. Upgrade to add it."})
+        return
+
+    user_id = sess.user_id
+    if user_id not in _sa_sessions:
+        _sa_sessions[user_id] = {"content": "", "scan_count": 0}
+
+    sa = _sa_sessions[user_id]
+    scan_num = sa["scan_count"] + 1
+    separator = f"\n\n--- Scan {scan_num} ---\n"
+    new_content = sa["content"] + separator + text
+
+    lines = new_content.strip().split("\n")
+    truncated = False
+    if len(lines) > max_lines:
+        new_content = "\n".join(lines[:max_lines])
+        lines = new_content.strip().split("\n")
+        truncated = True
+
+    sa["content"] = new_content
+    sa["scan_count"] = scan_num
+
+    payload = {"scan_count": scan_num, "line_count": len(lines), "max_lines": max_lines}
+    if truncated:
+        emit("sa_error", {"msg": f"Line limit ({max_lines}) reached — content was truncated. Click Stop & Answer now."})
+    emit("sa_updated", payload)
+
+
+@socketio.on("sa_stop_and_answer")
+def on_sa_stop_and_answer():
+    """Generate an AI answer from the accumulated S&A session buffer."""
+    sess = get_session(request.sid)
+    if not sess.user_id:
+        emit("sa_error", {"msg": "Not authenticated"})
+        return
+
+    lim = sess.plan_limits
+    sa_day_limit = lim.get("scan_answer_day", 0)
+    if _is_admin(sess):
+        sa_day_limit = 999_999
+
+    if sa_day_limit == 0:
+        emit("sa_error", {"msg": "Scan & Answer is not included in your plan. Upgrade to Starter+S&A, Pro+S&A, or S&A Only."})
+        return
+
+    if not _is_admin(sess) and sess.usage_today_sa >= sa_day_limit:
+        emit("sa_error", {"msg": f"Daily Scan & Answer limit ({sa_day_limit}/day) reached. Resets at midnight."})
+        return
+
+    user_id = sess.user_id
+    sa = _sa_sessions.get(user_id)
+    if not sa or not sa.get("content", "").strip():
+        emit("sa_error", {"msg": "No scanned content in session. Scan something first, then click Stop & Answer."})
+        return
+
+    content = sa["content"].strip()
+    max_lines = lim.get("scan_answer_max_lines", 10)
+    if _is_admin(sess):
+        max_lines = 999_999
+
+    lines = content.split("\n")
+    if len(lines) > max_lines:
+        content = "\n".join(lines[:max_lines])
+
+    emit("sa_status", {"msg": "Analyzing content and generating answer..."})
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key or not HAS_ANTHROPIC:
+        emit("sa_error", {"msg": "AI service unavailable. Please try again later."})
+        return
+
+    try:
+        client = _make_anthropic_client(api_key)
+
+        prompt = (
+            "You are analyzing content captured by a camera scanner (possibly across multiple scans).\n"
+            "The content may be one or more of these types:\n"
+            "- Multiple choice questions (MCQs): answer each with the correct option and brief reasoning\n"
+            "- Code to analyze or debug: explain what it does and fix any errors\n"
+            "- Incomplete code: complete it so it is runnable and functional\n"
+            "- A programming problem or exercise: provide a complete, working solution\n"
+            "- A general question or text: answer it comprehensively\n\n"
+            "Format your response clearly in Markdown. Use proper code blocks with language tags.\n"
+            "If multiple scans are included (--- Scan N ---), treat them as one continuous piece.\n\n"
+            "Captured content:\n\n"
+            f"{content}\n\n"
+            "Provide a clear, comprehensive answer:"
+        )
+
+        answer_text = ""
+        with client.messages.stream(
+            model=VISION_OCR_MODEL,
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                answer_text += chunk
+                emit("sa_token", {"token": chunk})
+
+        # Save answer file to Supabase Storage
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        filename   = f"answer_{timestamp}.md"
+        storage_path = f"{user_id}/answers/{filename}"
+        download_url = ""
+        if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+            ok = supabase_write_text(storage_path, answer_text)
+            if ok:
+                download_url = supabase_signed_url(storage_path, expires_in=86400)
+
+        # Track usage
+        sess.usage_today_sa += 1
+        db_inc_sa_daily(user_id)
+
+        # Clear session buffer
+        _sa_sessions.pop(user_id, None)
+
+        emit("sa_done", {
+            "filename":     filename,
+            "answer":       answer_text,
+            "download_url": download_url,
+        })
+        print(f"[sa] answer generated user={sess.user_email} file={filename}", flush=True)
+
+    except Exception as e:
+        print(f"[sa] error user={sess.user_email}: {e}", flush=True)
+        emit("sa_error", {"msg": f"Error generating answer: {str(e)[:200]}"})
+
+
+@socketio.on("sa_clear")
+def on_sa_clear():
+    """Clear the user's S&A session buffer."""
+    sess = get_session(request.sid)
+    if sess.user_id:
+        _sa_sessions.pop(sess.user_id, None)
+    emit("sa_cleared", {})
+
+
+# ---------------------------------------------------------------------------
 # Admin HTTP routes
 # ---------------------------------------------------------------------------
 def _require_auth(request_obj) -> tuple[dict | None, str]:
@@ -2860,10 +3114,13 @@ def my_plan():
         "files_saved":       monthly.get("files_saved", 0),
         "max_files":         lim.get("max_files", 0),
         # features
-        "sonnet_allowed":    lim.get("sonnet_allowed", False),
-        "max_lines_scan":    lim.get("max_lines_scan", 0),
-        "save_allowed":      lim.get("save_allowed", True),
-        "ai_fix_allowed":    bool(lim.get("ai_fixes_month", 0)),
+        "sonnet_allowed":         lim.get("sonnet_allowed", False),
+        "max_lines_scan":         lim.get("max_lines_scan", 0),
+        "save_allowed":           lim.get("save_allowed", True),
+        "ai_fix_allowed":         bool(lim.get("ai_fixes_month", 0)),
+        "scan_answer_day_limit":  lim.get("scan_answer_day", 0),
+        "scan_answer_max_lines":  lim.get("scan_answer_max_lines", 0),
+        "scan_answer_today":      daily.get("scan_answers", 0),
     })
 
 
