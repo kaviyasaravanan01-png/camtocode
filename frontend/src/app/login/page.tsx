@@ -1,6 +1,7 @@
 'use client'
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import InstallAppButton from '@/components/InstallAppButton'
 
 function getRedirectTarget() {
   if (typeof window === 'undefined') return '/app'
@@ -105,6 +106,17 @@ export default function LoginPage() {
             {mode === 'login' ? 'Sign Up' : 'Sign In'}
           </button>
         </p>
+
+        <div style={styles.installBox}>
+          <p style={styles.installTitle}>📲 Use CamToCode like a phone app</p>
+          <p style={styles.installDesc}>
+            No Play Store needed. Tap below — on Android Chrome it installs to your home screen in one tap.
+            On iPhone, we show quick steps (Share → Add to Home Screen).
+          </p>
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: '0.75rem' }}>
+            <InstallAppButton variant="landing" />
+          </div>
+        </div>
       </div>
     </div>
   )
@@ -225,5 +237,23 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     cursor: 'pointer',
     borderRadius: 0,
+  },
+  installBox: {
+    marginTop: '1.75rem',
+    paddingTop: '1.5rem',
+    borderTop: '1px solid rgba(255,255,255,0.08)',
+    textAlign: 'center',
+  },
+  installTitle: {
+    margin: '0 0 0.5rem',
+    color: '#c7d2fe',
+    fontSize: '0.88rem',
+    fontWeight: 700,
+  },
+  installDesc: {
+    margin: 0,
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: '0.78rem',
+    lineHeight: 1.55,
   },
 }

@@ -4,6 +4,7 @@ import { io, Socket } from 'socket.io-client'
 import { createClient } from '@/lib/supabase'
 import UsageBadge, { type PlanUsage } from './UsageBadge'
 import PayButton from './PayButton'
+import InstallAppButton from './InstallAppButton'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
@@ -860,6 +861,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug log">🪲</button>
           <a href="/history" style={s.historyLink}>History</a>
           <a href="/account" style={s.historyLink}>Account</a>
+          <InstallAppButton variant="compact" />
           {/* {planUsage?.plan === 'admin' && (
             <a href="/admin" style={{ ...s.historyLink, color: '#f59e0b' }}>Admin</a>
           )} */}

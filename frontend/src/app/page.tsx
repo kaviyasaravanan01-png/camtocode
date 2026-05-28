@@ -1,6 +1,8 @@
 'use client'
 import Link from 'next/link'
 import PayButton from '@/components/PayButton'
+import ShareButtons from '@/components/ShareButtons'
+import InstallAppButton from '@/components/InstallAppButton'
 
 // ─── Pricing data ────────────────────────────────────────────────────────────
 const PLANS = [
@@ -285,6 +287,10 @@ export default function LandingPage() {
           <Link href="/login" style={s.ctaPrimary}>Start for Free →</Link>
           <a href="#how-it-works" style={s.ctaSecondary}>See How It Works</a>
         </div>
+        <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+          <InstallAppButton variant="landing" />
+          <ShareButtons />
+        </div>
         <div style={s.heroStats}>
           <div style={s.heroStat}><span style={s.heroStatNum}>Claude</span><span style={s.heroStatLabel}>Vision AI</span></div>
           <div style={s.heroStatDivider} />
@@ -545,6 +551,9 @@ export default function LandingPage() {
             Join developers who use CamToCode to digitize code in seconds — for free.
           </p>
           <Link href="/login" style={s.ctaBannerBtn}>Get Started Free — No Card Required</Link>
+          <div style={{ marginTop: '1.25rem' }}>
+            <ShareButtons compact />
+          </div>
         </div>
       </section>
 
@@ -556,6 +565,9 @@ export default function LandingPage() {
             <p style={s.footerTagline}>
               Point your camera at code. Get clean code instantly.
             </p>
+            <div style={{ marginTop: '1rem' }}>
+              <ShareButtons compact />
+            </div>
           </div>
           <div style={s.footerLinks}>
             <div style={s.footerCol}>
