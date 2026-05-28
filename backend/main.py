@@ -73,6 +73,8 @@ SCAN_RATE_PER_MINUTE = 8      # rolling-window cap
 
 # Vision OCR always uses Haiku (cost control — never Sonnet for image calls)
 VISION_OCR_MODEL = "claude-haiku-4-5-20251001"
+# Scan & Answer + Instant Answer use the same Haiku model (text or vision)
+SA_ANSWER_MODEL = VISION_OCR_MODEL
 
 PLANS: dict[str, dict] = {
     # ── Free ──────────────────────────────────────────────────────────────
@@ -328,6 +330,9 @@ class UserSession:
         # ── Rate limiting (in-memory, per session) ───────────────────────
         self.last_scan_completed_at     = 0.0
         self.scan_timestamps: list[float] = []  # rolling 60-second window
+        self._stop_processing          = False   # guard against overlapping stop OCR
+        self._sa_answering             = False   # guard against overlapping S&A requests
+        self.instant_answer_mode       = False   # one-shot vision Q&A per capture
 
     def active_model(self) -> str:
         return LLM_MODELS.get(self.llm_model_key, LLM_MODELS["haiku"])
@@ -347,6 +352,10 @@ def get_session(sid: str) -> UserSession:
 def remove_session(sid: str):
     with _sessions_lock:
         _sessions.pop(sid, None)
+
+def _emit_to(sid: str, event: str, data: dict | None = None):
+    """Emit to a specific client — required when sending from background threads."""
+    socketio.emit(event, data or {}, to=sid)
 
 # ---------------------------------------------------------------------------
 # Frame worker queue — one queue, dispatcher uses sid to route
@@ -1803,6 +1812,7 @@ def on_connect():
         "bulk_capture":            sess.bulk_capture,
         "bulk_session_blocks":     sess.bulk_session_blocks,
         "bulk_session_number":     sess.bulk_session_number,
+        "instant_answer_mode":     sess.instant_answer_mode,
         "user_id":                 sess.user_id,
         "user_email":              sess.user_email,
         "plan_usage":              plan_usage_payload(sess),
@@ -1872,220 +1882,261 @@ def on_stop():
         sess.frame_rgb_buf.clear()
 
     if not rgb_buf:
-        emit("status", {"capturing": False, "msg": "Stopped - no sharp frames captured"})
+        emit("status", {"capturing": False, "processing": False, "msg": "Stopped - no sharp frames captured"})
+        return
+
+    if sess._stop_processing:
+        emit("status", {"capturing": False, "processing": True, "msg": "Still processing previous scan..."})
         return
 
     # ── Subscription rate + scan limit checks ────────────────────────────
     is_ai_scan = sess.ai_enabled and bool(os.environ.get("ANTHROPIC_API_KEY"))
     rate_ok, rate_msg = check_rate_limits(sess)
     if not rate_ok:
-        emit("status", {"capturing": False, "msg": rate_msg})
+        emit("status", {"capturing": False, "processing": False, "msg": rate_msg})
         return
     scan_ok, scan_msg = check_scan_limits(sess, is_ai=is_ai_scan)
     if not scan_ok:
-        emit("status", {"capturing": False, "msg": scan_msg,
+        emit("status", {"capturing": False, "processing": False, "msg": scan_msg,
                         "limit_hit": True, "plan_usage": plan_usage_payload(sess)})
         return
 
-    if len(rgb_buf) < MIN_FRAMES_CONSENSUS:
-        emit("status", {"capturing": True, "msg": f"Only {len(rgb_buf)} frame(s) — processing anyway..."})
+    sess._stop_processing = True
+    if sess.instant_answer_mode:
+        if sess._sa_answering:
+            sess._stop_processing = False
+            emit("sa_status", {"msg": "Already generating an answer..."})
+            emit("status", {"capturing": False, "processing": False, "msg": "Already answering..."})
+            return
+        emit("status", {"capturing": False, "processing": True, "msg": "Reading question..."})
+        sess._sa_answering = True
+        emit("sa_status", {"msg": "Reading question and generating answer..."})
+        threading.Thread(
+            target=_run_instant_answer_from_frames,
+            args=(sid, rgb_buf),
+            daemon=True,
+        ).start()
+        return
 
-    results_with_conf: list[tuple[str, float]] = []
-    best_line_confs: list[float] = []
-    ai_used  = False
-    text     = ""
-    api_key  = os.environ.get("ANTHROPIC_API_KEY", "")
+    emit("status", {"capturing": False, "processing": True, "msg": "Processing scan..."})
+    threading.Thread(
+        target=_process_stop_scan,
+        args=(sid, buf, rgb_buf, is_ai_scan),
+        daemon=True,
+    ).start()
 
-    # Primary: Claude Vision (ALWAYS Haiku — enforced by VISION_OCR_MODEL)
-    if sess.ai_enabled and HAS_ANTHROPIC and api_key:
-        emit("status", {"capturing": True, "msg": "Reading code with Claude Vision (Haiku)..."})
-        try:
-            best_img        = _best_frame(rgb_buf)
-            b64, media_type = _encode_for_vision(best_img)
-            vision_text     = _vision_ocr(b64, media_type, sess.language_hint)
-            if vision_text:
-                text    = vision_text
-                ai_used = True
-            else:
-                emit("status", {"capturing": False, "msg": "Vision returned empty — hold phone steadier"})
+
+def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
+    """Run OCR/LLM pipeline in a background thread so polling clients receive status updates."""
+    sess = get_session(sid)
+    try:
+        if len(rgb_buf) < MIN_FRAMES_CONSENSUS:
+            _emit_to(sid, "status", {"capturing": False, "processing": True,
+                                     "msg": f"Only {len(rgb_buf)} frame(s) — processing anyway..."})
+
+        results_with_conf: list[tuple[str, float]] = []
+        best_line_confs: list[float] = []
+        ai_used  = False
+        text     = ""
+        api_key  = os.environ.get("ANTHROPIC_API_KEY", "")
+
+        # Primary: Claude Vision (ALWAYS Haiku — enforced by VISION_OCR_MODEL)
+        if sess.ai_enabled and HAS_ANTHROPIC and api_key:
+            _emit_to(sid, "status", {"capturing": False, "processing": True,
+                                     "msg": "Reading code with Claude Vision (Haiku)..."})
+            try:
+                best_img        = _best_frame(rgb_buf)
+                b64, media_type = _encode_for_vision(best_img)
+                vision_text     = _vision_ocr(b64, media_type, sess.language_hint)
+                if vision_text:
+                    text    = vision_text
+                    ai_used = True
+                else:
+                    _emit_to(sid, "status", {"capturing": False, "processing": False,
+                                             "msg": "Vision returned empty — hold phone steadier"})
+                    return
+            except Exception as e:
+                _emit_to(sid, "status", {"capturing": False, "processing": False,
+                                         "msg": f"Vision OCR failed: {e}. Disable AI to use Tesseract."})
                 return
-        except Exception as e:
-            emit("status", {"capturing": False, "msg": f"Vision OCR failed: {e}. Disable AI to use Tesseract."})
+
+        # Fallback: Tesseract
+        if not text and rgb_buf:
+            _emit_to(sid, "status", {"capturing": False, "processing": True, "msg": "Running OCR..."})
+            try:
+                avg_img = pixel_average_frames(rgb_buf)
+                t_avg, c_avg, lc_avg, _ = _tesseract_with_confidence(preprocess(avg_img, sess.night_mode))
+                t_avg = fix_code_symbols(t_avg).strip()
+                if t_avg:
+                    results_with_conf.append((t_avg, c_avg))
+                    best_line_confs = lc_avg
+            except Exception:
+                pass
+
+            if len(rgb_buf) >= 2:
+                try:
+                    aligned = align_frames(rgb_buf)
+                    for rgb in aligned:
+                        t, c, lc, _ = _tesseract_with_confidence(preprocess(rgb, sess.night_mode))
+                        t = fix_code_symbols(t).strip()
+                        if t:
+                            results_with_conf.append((t, c))
+                            if c > max((x for _, x in results_with_conf[:-1]), default=-1):
+                                best_line_confs = lc
+                except Exception:
+                    pass
+
+            if results_with_conf:
+                best_tess_conf = max(c for _, c in results_with_conf)
+                if best_tess_conf < 35:
+                    _emit_to(sid, "status", {"capturing": False, "processing": False,
+                                             "msg": f"Tesseract confidence only {best_tess_conf:.0f}% — enable AI for better results"})
+                    return
+                text = confidence_weighted_consensus(results_with_conf).strip()
+            elif buf:
+                text = fix_code_symbols(character_level_consensus(buf) if len(buf) > 1 else buf[0]).strip()
+
+            if text and rgb_buf:
+                try:
+                    text = reconstruct_indentation(text, rgb_buf[0])
+                except Exception:
+                    pass
+
+        if not text:
+            _emit_to(sid, "status", {"capturing": False, "processing": False,
+                                     "msg": "OCR returned empty — enable AI or move closer"})
             return
 
-    # Fallback: Tesseract
-    if not text and rgb_buf:
-        try:
-            avg_img = pixel_average_frames(rgb_buf)
-            t_avg, c_avg, lc_avg, _ = _tesseract_with_confidence(preprocess(avg_img, sess.night_mode))
-            t_avg = fix_code_symbols(t_avg).strip()
-            if t_avg:
-                results_with_conf.append((t_avg, c_avg))
-                best_line_confs = lc_avg
-        except Exception:
-            pass
+        # ── Enforce plan line cap before any LLM call ────────────────────
+        max_lines = sess.plan_limits.get("max_lines_scan", 99999)
+        lines = text.splitlines()
+        if len(lines) > max_lines:
+            text = "\n".join(lines[:max_lines])
+            _emit_to(sid, "status", {"capturing": False, "processing": True,
+                                     "msg": f"Truncated to {max_lines} lines (plan limit). Upgrade for more."})
 
-        if len(rgb_buf) >= 2:
+        lang = sess.language_hint if sess.language_hint else detect_language(text)
+
+        # Syntax-guided repair (Haiku only — no additional plan check needed)
+        if not ai_used and sess.ai_enabled and HAS_ANTHROPIC and api_key and lang == "python":
             try:
-                aligned = align_frames(rgb_buf)
-                for rgb in aligned:
-                    t, c, lc, _ = _tesseract_with_confidence(preprocess(rgb, sess.night_mode))
-                    t = fix_code_symbols(t).strip()
-                    if t:
-                        results_with_conf.append((t, c))
-                        if c > max((x for _, x in results_with_conf[:-1]), default=-1):
-                            best_line_confs = lc
+                ok, err = check_python_syntax(text)
+                if not ok and err:
+                    raw_lineno = err.split(":")[0].replace("Line ", "").strip()
+                    if raw_lineno.isdigit():
+                        repaired = llm_repair_syntax(text, int(raw_lineno), err, sess)
+                        if repaired != text:
+                            text = repaired
+                            ai_used = True
             except Exception:
                 pass
 
-        if results_with_conf:
-            best_tess_conf = max(c for _, c in results_with_conf)
-            if best_tess_conf < 35:
-                emit("status", {"capturing": False, "msg": f"Tesseract confidence only {best_tess_conf:.0f}% — enable AI for better results"})
-                return
-            text = confidence_weighted_consensus(results_with_conf).strip()
-        elif buf:
-            text = fix_code_symbols(character_level_consensus(buf) if len(buf) > 1 else buf[0]).strip()
+        # Full LLM correction
+        if not ai_used and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+            _emit_to(sid, "status", {"capturing": False, "processing": True, "msg": "AI correcting code..."})
+            corrected = llm_correct_code(text, lang, best_line_confs if best_line_confs else None, sess)
+            if corrected and corrected != text:
+                text = corrected
+                ai_used = True
 
-        if text and rgb_buf:
+        # Final syntax check + second-pass repair
+        _JS_LANGS = {"javascript", "typescript", "react", "nestjs", "nextjs"}
+        if lang == "python":
+            syntax_ok, syntax_err = check_python_syntax(text)
+        elif lang in _JS_LANGS:
+            syntax_ok, syntax_err = check_js_syntax(text)
+            if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+                repaired = llm_repair_js_syntax(text, syntax_err, lang, sess)
+                if repaired and repaired != text:
+                    text = repaired
+                    ai_used = True
+                    syntax_ok, syntax_err = check_js_syntax(text)
+        elif lang == "go":
+            syntax_ok, syntax_err = check_go_syntax(text)
+            if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+                repaired = llm_repair_syntax_generic(text, syntax_err, "go", sess)
+                if repaired and repaired != text:
+                    text = repaired
+                    ai_used = True
+                    syntax_ok, syntax_err = check_go_syntax(text)
+        elif lang == "css":
+            syntax_ok, syntax_err = check_css_syntax(text)
+            if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+                repaired = llm_repair_syntax_generic(text, syntax_err, "css", sess)
+                if repaired and repaired != text:
+                    text = repaired
+                    ai_used = True
+                    syntax_ok, syntax_err = check_css_syntax(text)
+        else:
+            syntax_ok, syntax_err = True, None
+
+        # Duplicate check
+        sim = text_similarity(sess.last_saved, text)
+        if sim > SIMILARITY_THRESH:
+            _emit_to(sid, "status", {"capturing": False, "processing": False,
+                                     "msg": f"Duplicate block skipped ({sim:.0%} match)"})
+            return
+
+        sess.last_saved = text
+
+        # Save to Supabase Storage (per user) or local fallback
+        _file_sep = "\n────────────────────────\n\n" if sess.auto_recapture_separator else ""
+        if sess.user_id and SUPABASE_URL:
+            supabase_append_text(_sb_storage_path(sess.user_id), _file_sep + text + "\n\n")
+        else:
             try:
-                text = reconstruct_indentation(text, rgb_buf[0])
+                with open(f"output_{sid}.txt", "a", encoding="utf-8") as f:
+                    f.write(_file_sep + text + "\n\n")
             except Exception:
                 pass
 
-    if not text:
-        emit("status", {"capturing": False, "msg": "OCR returned empty — enable AI or move closer"})
-        return
+        record_scan(sess, is_ai=is_ai_scan and ai_used)
 
-    # ── Enforce plan line cap before any LLM call ────────────────────────
-    max_lines = sess.plan_limits.get("max_lines_scan", 99999)
-    lines = text.splitlines()
-    if len(lines) > max_lines:
-        text = "\n".join(lines[:max_lines])
-        emit("status", {"capturing": True,
-                        "msg": f"Truncated to {max_lines} lines (plan limit). Upgrade for more."})
+        _bulk_block_num = None
+        if sess.bulk_capture:
+            sess.bulk_session_blocks += 1
+            _bulk_block_num = sess.bulk_session_blocks
 
-    lang = sess.language_hint if sess.language_hint else detect_language(text)
+        _emit_to(sid, "result", {
+            "text": text, "lang": lang, "ai_used": ai_used,
+            "syntax_ok": syntax_ok, "syntax_err": syntax_err,
+            "plan_usage": plan_usage_payload(sess),
+        })
+        _status_data: dict = {
+            "capturing": False,
+            "processing": False,
+            "msg": (f"Block {_bulk_block_num} saved" if _bulk_block_num else "Saved"),
+        }
+        if _bulk_block_num is not None:
+            _status_data["bulk_block"] = _bulk_block_num
+        _emit_to(sid, "status", _status_data)
 
-    # Syntax-guided repair (Haiku only — no additional plan check needed)
-    if not ai_used and sess.ai_enabled and HAS_ANTHROPIC and api_key and lang == "python":
-        try:
-            ok, err = check_python_syntax(text)
-            if not ok and err:
-                raw_lineno = err.split(":")[0].replace("Line ", "").strip()
-                if raw_lineno.isdigit():
-                    repaired = llm_repair_syntax(text, int(raw_lineno), err, sess)
-                    if repaired != text:
-                        text = repaired
-                        ai_used = True
-        except Exception:
-            pass
+        if sess.auto_clear_after_export and sess.user_id and SUPABASE_URL:
+            supabase_write_text(_sb_storage_path(sess.user_id), "")
+            _emit_to(sid, "status", {"processing": False, "msg": "Auto-cleared for next session"})
 
-    # Full LLM correction
-    if not ai_used and sess.ai_enabled and HAS_ANTHROPIC and api_key:
-        corrected = llm_correct_code(text, lang, best_line_confs if best_line_confs else None, sess)
-        if corrected and corrected != text:
-            text = corrected
-            ai_used = True
+        if sess.auto_recapture_enabled and not sess.auto_recapture_active:
+            sess.auto_recapture_active = True
+            interval = sess.auto_recapture_interval
 
-    # Final syntax check + second-pass repair
-    _JS_LANGS = {"javascript", "typescript", "react", "nestjs", "nextjs"}
-    if lang == "python":
-        syntax_ok, syntax_err = check_python_syntax(text)
-    elif lang in _JS_LANGS:
-        syntax_ok, syntax_err = check_js_syntax(text)
-        if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
-            repaired = llm_repair_js_syntax(text, syntax_err, lang, sess)
-            if repaired and repaired != text:
-                text = repaired
-                ai_used = True
-                syntax_ok, syntax_err = check_js_syntax(text)
-    elif lang == "go":
-        syntax_ok, syntax_err = check_go_syntax(text)
-        if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
-            repaired = llm_repair_syntax_generic(text, syntax_err, "go", sess)
-            if repaired and repaired != text:
-                text = repaired
-                ai_used = True
-                syntax_ok, syntax_err = check_go_syntax(text)
-    elif lang == "css":
-        syntax_ok, syntax_err = check_css_syntax(text)
-        if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
-            repaired = llm_repair_syntax_generic(text, syntax_err, "css", sess)
-            if repaired and repaired != text:
-                text = repaired
-                ai_used = True
-                syntax_ok, syntax_err = check_css_syntax(text)
-    else:
-        syntax_ok, syntax_err = True, None
+            def countdown_timer():
+                import time
+                for remaining in range(interval, 0, -1):
+                    if not sess.auto_recapture_active:
+                        if not sess.auto_recapture_enabled:
+                            socketio.emit("recapture_cancelled", {}, to=sid)
+                        return
+                    socketio.emit("recapture_countdown", {"remaining": remaining, "total": interval}, to=sid)
+                    time.sleep(1)
+                if sess.auto_recapture_active and sess.auto_recapture_enabled:
+                    sess.auto_recapture_active = False
+                    socketio.emit("recapture_countdown", {"remaining": 0, "total": interval}, to=sid)
+                    time.sleep(0.2)
+                    socketio.emit("recapture_trigger", {}, to=sid)
 
-    # Duplicate check
-    sim = text_similarity(sess.last_saved, text)
-    if sim > SIMILARITY_THRESH:
-        emit("status", {"capturing": False, "msg": f"Duplicate block skipped ({sim:.0%} match)"})
-        return
-
-    sess.last_saved = text
-
-    # Save to Supabase Storage (per user) or local fallback
-    # When auto_recapture is on, the file is NOT cleared between cycles (see on_start),
-    # so prefix a separator so scans are clearly delimited in the stored file.
-    _file_sep = "\n────────────────────────\n\n" if sess.auto_recapture_separator else ""
-    if sess.user_id and SUPABASE_URL:
-        supabase_append_text(_sb_storage_path(sess.user_id), _file_sep + text + "\n\n")
-    else:
-        try:
-            with open(f"output_{sid}.txt", "a", encoding="utf-8") as f:
-                f.write(_file_sep + text + "\n\n")
-        except Exception:
-            pass
-
-    # ── Record usage ─────────────────────────────────────────────────────
-    record_scan(sess, is_ai=is_ai_scan and ai_used)
-
-    _bulk_block_num = None
-    if sess.bulk_capture:
-        sess.bulk_session_blocks += 1
-        _bulk_block_num = sess.bulk_session_blocks
-
-    emit("result", {
-        "text": text, "lang": lang, "ai_used": ai_used,
-        "syntax_ok": syntax_ok, "syntax_err": syntax_err,
-        "plan_usage": plan_usage_payload(sess),
-    })
-    _status_data: dict = {
-        "capturing": False,
-        "msg": (f"Block {_bulk_block_num} saved" if _bulk_block_num else "Saved"),
-    }
-    if _bulk_block_num is not None:
-        _status_data["bulk_block"] = _bulk_block_num
-    emit("status", _status_data)
-
-    if sess.auto_clear_after_export and sess.user_id and SUPABASE_URL:
-        supabase_write_text(_sb_storage_path(sess.user_id), "")
-        emit("status", {"msg": "Auto-cleared for next session"})
-
-    if sess.auto_recapture_enabled and not sess.auto_recapture_active:
-        sess.auto_recapture_active = True
-        client_sid = request.sid
-        interval   = sess.auto_recapture_interval
-
-        def countdown_timer():
-            import time
-            for remaining in range(interval, 0, -1):
-                if not sess.auto_recapture_active:
-                    if not sess.auto_recapture_enabled:
-                        socketio.emit("recapture_cancelled", {}, to=client_sid)
-                    return
-                socketio.emit("recapture_countdown", {"remaining": remaining, "total": interval}, to=client_sid)
-                time.sleep(1)
-            if sess.auto_recapture_active and sess.auto_recapture_enabled:
-                sess.auto_recapture_active = False
-                socketio.emit("recapture_countdown", {"remaining": 0, "total": interval}, to=client_sid)
-                time.sleep(0.2)
-                socketio.emit("recapture_trigger", {}, to=client_sid)
-
-        threading.Thread(target=countdown_timer, daemon=True).start()
+            threading.Thread(target=countdown_timer, daemon=True).start()
+    finally:
+        sess._stop_processing = False
 
 
 @socketio.on("photo")
@@ -2096,7 +2147,32 @@ def on_photo(data):
     try:
         img_np = decode_b64(data["image"])
     except Exception as e:
-        emit("status", {"capturing": False, "msg": f"Photo decode error: {e}"})
+        emit("status", {"capturing": False, "processing": False, "msg": f"Photo decode error: {e}"})
+        return
+
+    # ── Instant Answer: vision Q&A directly from the photo ─────────────
+    if sess.instant_answer_mode:
+        if sess._sa_answering:
+            emit("sa_status", {"msg": "Already generating an answer..."})
+            return
+        ok, err = _check_sa_answer_allowed(sess)
+        if not ok:
+            emit("sa_error", {"msg": err})
+            emit("status", {"capturing": False, "processing": False, "msg": err})
+            return
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key or not HAS_ANTHROPIC:
+            emit("sa_error", {"msg": "AI service unavailable. Please try again later."})
+            emit("status", {"capturing": False, "processing": False, "msg": "AI unavailable"})
+            return
+        sess._sa_answering = True
+        emit("status", {"capturing": False, "processing": True, "msg": "Reading question..."})
+        emit("sa_status", {"msg": "Reading question and generating answer..."})
+        threading.Thread(
+            target=_run_instant_answer_from_image,
+            args=(sid, img_np),
+            daemon=True,
+        ).start()
         return
 
     # ── Subscription rate + scan limit checks ────────────────────────────
@@ -2711,6 +2787,143 @@ def on_get_plan_usage():
 # Scan & Answer socket events
 # ---------------------------------------------------------------------------
 
+_INSTANT_ANSWER_PROMPT = (
+    "You are looking at a photo taken with a phone camera. The image may contain:\n"
+    "- Multiple choice questions (MCQs) with options like A/B/C/D or 1/2/3/4\n"
+    "- Short-answer or fill-in-the-blank questions\n"
+    "- Math, logic, or programming problems\n"
+    "- Code snippets paired with a question\n"
+    "- General study material or exam questions\n\n"
+    "Read ALL visible questions carefully from the image.\n"
+    "For each question:\n"
+    "1. Quote or restate the question briefly\n"
+    "2. Give the correct answer (option letter for MCQs, full answer otherwise)\n"
+    "3. Add a brief 1–2 sentence explanation\n\n"
+    "Format your response in clear Markdown. Use numbered sections if there are multiple questions.\n"
+    "If the image is unreadable, say so and suggest how to improve the capture."
+)
+
+_SA_TEXT_ANSWER_PROMPT_HEAD = (
+    "You are analyzing content captured by a camera scanner (possibly across multiple scans).\n"
+    "The content may be one or more of these types:\n"
+    "- Multiple choice questions (MCQs): answer each with the correct option and brief reasoning\n"
+    "- Code to analyze or debug: explain what it does and fix any errors\n"
+    "- Incomplete code: complete it so it is runnable and functional\n"
+    "- A programming problem or exercise: provide a complete, working solution\n"
+    "- A general question or text: answer it comprehensively\n\n"
+    "Format your response clearly in Markdown. Use proper code blocks with language tags.\n"
+    "If multiple scans are included (--- Scan N ---), treat them as one continuous piece.\n\n"
+    "Captured content:\n\n"
+)
+
+
+def _check_sa_answer_allowed(sess) -> tuple[bool, str]:
+    """Return (ok, error_message) for S&A / Instant Answer usage."""
+    if not sess.user_id:
+        return False, "Not authenticated"
+    lim = sess.plan_limits
+    sa_day_limit = lim.get("scan_answer_day", 0)
+    if _is_admin(sess):
+        return True, ""
+    if sa_day_limit == 0:
+        return False, "Scan & Answer is not included in your plan. Upgrade to Starter+S&A, Pro+S&A, or S&A Only."
+    if sess.usage_today_sa >= sa_day_limit:
+        return False, f"Daily Scan & Answer limit ({sa_day_limit}/day) reached. Resets at midnight."
+    return True, ""
+
+
+def _save_and_emit_sa_done(sid: str, sess, user_id: str, answer_text: str, source: str = "accumulated"):
+    """Persist answer file, bump usage, and notify client."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    prefix = "instant" if source == "instant" else "answer"
+    filename = f"{prefix}_{timestamp}.md"
+    storage_path = f"{user_id}/answers/{filename}"
+    download_url = ""
+    if SUPABASE_URL and SUPABASE_SERVICE_KEY:
+        ok = supabase_write_text(storage_path, answer_text)
+        if ok:
+            download_url = supabase_signed_url(storage_path, expires_in=86400)
+
+    sess.usage_today_sa += 1
+    db_inc_sa_daily(user_id)
+    _sa_sessions.pop(user_id, None)
+
+    _emit_to(sid, "sa_done", {
+        "filename":     filename,
+        "answer":       answer_text,
+        "download_url": download_url,
+        "plan_usage":   plan_usage_payload(sess),
+        "source":       source,
+    })
+    print(f"[sa] {source} answer user={sess.user_email} file={filename}", flush=True)
+
+
+def _run_instant_answer_from_frames(sid: str, rgb_buf: list):
+    """Instant Answer from live capture frames — uses Claude Vision on best frame."""
+    sess = get_session(sid)
+    try:
+        if not rgb_buf:
+            _emit_to(sid, "sa_error", {"msg": "No frames captured — hold steady and try again."})
+            return
+        best_img = _best_frame(rgb_buf)
+        _run_instant_answer_from_image(sid, best_img)
+    finally:
+        sess._stop_processing = False
+
+
+def _run_instant_answer_from_image(sid: str, img_np):
+    """Instant Answer from a single image — Claude Vision reads the question directly."""
+    sess = get_session(sid)
+    user_id = sess.user_id
+    try:
+        ok, err = _check_sa_answer_allowed(sess)
+        if not ok:
+            _emit_to(sid, "sa_error", {"msg": err})
+            return
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key or not HAS_ANTHROPIC:
+            _emit_to(sid, "sa_error", {"msg": "AI service unavailable. Please try again later."})
+            return
+
+        b64, media_type = _encode_for_vision(img_np)
+        client = _make_anthropic_client(api_key)
+        answer_text = ""
+
+        with client.messages.stream(
+            model=SA_ANSWER_MODEL,
+            max_tokens=4000,
+            messages=[{"role": "user", "content": [
+                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
+                {"type": "text", "text": _INSTANT_ANSWER_PROMPT},
+            ]}],
+        ) as stream:
+            for chunk in stream.text_stream:
+                answer_text += chunk
+                _emit_to(sid, "sa_token", {"token": chunk})
+
+        if not answer_text.strip():
+            _emit_to(sid, "sa_error", {"msg": "Could not read the question. Move closer and try again."})
+            return
+
+        _save_and_emit_sa_done(sid, sess, user_id, answer_text, source="instant")
+
+    except Exception as e:
+        print(f"[sa] instant error user={sess.user_email}: {e}", flush=True)
+        _emit_to(sid, "sa_error", {"msg": f"Error generating answer: {str(e)[:200]}"})
+    finally:
+        sess._sa_answering = False
+
+
+@socketio.on("set_instant_answer")
+def on_set_instant_answer(data):
+    sess = get_session(request.sid)
+    sess.instant_answer_mode = bool((data or {}).get("enabled"))
+    if sess.instant_answer_mode:
+        _sa_sessions.pop(sess.user_id, None) if sess.user_id else None
+    emit("instant_answer_state", {"enabled": sess.instant_answer_mode})
+
+
 @socketio.on("sa_append")
 def on_sa_append(data):
     """Append scanned text to the user's S&A session buffer."""
@@ -2759,23 +2972,20 @@ def on_sa_append(data):
 
 @socketio.on("sa_stop_and_answer")
 def on_sa_stop_and_answer():
-    """Generate an AI answer from the accumulated S&A session buffer."""
-    sess = get_session(request.sid)
-    if not sess.user_id:
-        emit("sa_error", {"msg": "Not authenticated"})
+    """Validate S&A request and start answer generation in a background thread."""
+    sid  = request.sid
+    sess = get_session(sid)
+    if sess.instant_answer_mode:
+        emit("sa_error", {"msg": "Instant Answer is on — use Photo or Stop to capture. Turn off Instant to use accumulated S&A."})
         return
 
-    lim = sess.plan_limits
-    sa_day_limit = lim.get("scan_answer_day", 0)
-    if _is_admin(sess):
-        sa_day_limit = 999_999
-
-    if sa_day_limit == 0:
-        emit("sa_error", {"msg": "Scan & Answer is not included in your plan. Upgrade to Starter+S&A, Pro+S&A, or S&A Only."})
+    if sess._sa_answering:
+        emit("sa_status", {"msg": "Already generating an answer..."})
         return
 
-    if not _is_admin(sess) and sess.usage_today_sa >= sa_day_limit:
-        emit("sa_error", {"msg": f"Daily Scan & Answer limit ({sa_day_limit}/day) reached. Resets at midnight."})
+    ok, err = _check_sa_answer_allowed(sess)
+    if not ok:
+        emit("sa_error", {"msg": err})
         return
 
     user_id = sess.user_id
@@ -2785,76 +2995,61 @@ def on_sa_stop_and_answer():
         return
 
     content = sa["content"].strip()
+    lim = sess.plan_limits
     max_lines = lim.get("scan_answer_max_lines", 10)
     if _is_admin(sess):
         max_lines = 999_999
-
     lines = content.split("\n")
     if len(lines) > max_lines:
         content = "\n".join(lines[:max_lines])
-
-    emit("sa_status", {"msg": "Analyzing content and generating answer..."})
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key or not HAS_ANTHROPIC:
         emit("sa_error", {"msg": "AI service unavailable. Please try again later."})
         return
 
-    try:
-        client = _make_anthropic_client(api_key)
+    sess._sa_answering = True
+    emit("sa_status", {"msg": "Analyzing content and generating answer..."})
+    threading.Thread(
+        target=_run_sa_answer,
+        args=(sid, user_id, content),
+        daemon=True,
+    ).start()
 
-        prompt = (
-            "You are analyzing content captured by a camera scanner (possibly across multiple scans).\n"
-            "The content may be one or more of these types:\n"
-            "- Multiple choice questions (MCQs): answer each with the correct option and brief reasoning\n"
-            "- Code to analyze or debug: explain what it does and fix any errors\n"
-            "- Incomplete code: complete it so it is runnable and functional\n"
-            "- A programming problem or exercise: provide a complete, working solution\n"
-            "- A general question or text: answer it comprehensively\n\n"
-            "Format your response clearly in Markdown. Use proper code blocks with language tags.\n"
-            "If multiple scans are included (--- Scan N ---), treat them as one continuous piece.\n\n"
-            "Captured content:\n\n"
-            f"{content}\n\n"
-            "Provide a clear, comprehensive answer:"
-        )
+
+def _run_sa_answer(sid: str, user_id: str, content: str):
+    """Stream Anthropic answer from accumulated scan text."""
+    sess = get_session(sid)
+    try:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key or not HAS_ANTHROPIC:
+            _emit_to(sid, "sa_error", {"msg": "AI service unavailable. Please try again later."})
+            return
+
+        client = _make_anthropic_client(api_key)
+        prompt = _SA_TEXT_ANSWER_PROMPT_HEAD + f"{content}\n\nProvide a clear, comprehensive answer:"
 
         answer_text = ""
         with client.messages.stream(
-            model=VISION_OCR_MODEL,
+            model=SA_ANSWER_MODEL,
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             for chunk in stream.text_stream:
                 answer_text += chunk
-                emit("sa_token", {"token": chunk})
+                _emit_to(sid, "sa_token", {"token": chunk})
 
-        # Save answer file to Supabase Storage
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        filename   = f"answer_{timestamp}.md"
-        storage_path = f"{user_id}/answers/{filename}"
-        download_url = ""
-        if SUPABASE_URL and SUPABASE_SERVICE_KEY:
-            ok = supabase_write_text(storage_path, answer_text)
-            if ok:
-                download_url = supabase_signed_url(storage_path, expires_in=86400)
+        if not answer_text.strip():
+            _emit_to(sid, "sa_error", {"msg": "AI returned an empty answer. Please try again."})
+            return
 
-        # Track usage
-        sess.usage_today_sa += 1
-        db_inc_sa_daily(user_id)
-
-        # Clear session buffer
-        _sa_sessions.pop(user_id, None)
-
-        emit("sa_done", {
-            "filename":     filename,
-            "answer":       answer_text,
-            "download_url": download_url,
-        })
-        print(f"[sa] answer generated user={sess.user_email} file={filename}", flush=True)
+        _save_and_emit_sa_done(sid, sess, user_id, answer_text, source="accumulated")
 
     except Exception as e:
         print(f"[sa] error user={sess.user_email}: {e}", flush=True)
-        emit("sa_error", {"msg": f"Error generating answer: {str(e)[:200]}"})
+        _emit_to(sid, "sa_error", {"msg": f"Error generating answer: {str(e)[:200]}"})
+    finally:
+        sess._sa_answering = False
 
 
 @socketio.on("sa_clear")

@@ -53,7 +53,7 @@ interface ResultData {
   text: string; lang: string; ai_used: boolean
   syntax_ok: boolean; syntax_err?: string; download_url?: string
 }
-interface StatusData { capturing?: boolean; msg: string; bulk_block?: number; bulk_session?: number }
+interface StatusData { capturing?: boolean; processing?: boolean; msg: string; bulk_block?: number; bulk_session?: number }
 interface SessionFixedData {
   text?: string; lang?: string; filename?: string
   blocks?: number; session?: number; download_url?: string; error?: string
@@ -87,6 +87,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [debugLog,     setDebugLog]     = useState<string[]>([])
   const [showDebug,    setShowDebug]    = useState(false)
   const [capturing,    setCapturing]    = useState(false)
+  const [processingScan, setProcessingScan] = useState(false)
   const [statusMsg,    setStatusMsg]    = useState('Connecting...')
   const [liveText,     setLiveText]     = useState('')
   const [finalText,    setFinalText]    = useState('')
@@ -134,8 +135,14 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [saAnswerFilename,setSaAnswerFilename]= useState('')
   const [saAnswerUrl,     setSaAnswerUrl]     = useState('')
   const [saError,         setSaError]         = useState('')
+  const [saStatusMsg,     setSaStatusMsg]     = useState('')
+  const [saAppending,     setSaAppending]     = useState(false)
   const [showSaAnswer,    setShowSaAnswer]    = useState(false)
+  const [saAnswerSource,  setSaAnswerSource]  = useState<'accumulated' | 'instant'>('accumulated')
+  const [instantMode,     setInstantMode]     = useState(false)
   const saModeRef = useRef(false)
+  const instantModeRef = useRef(false)
+  const saAnsweringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Auto re-capture state
   const [autoRecapture,         setAutoRecapture]         = useState(false)
@@ -160,11 +167,32 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   useEffect(() => { showRoiRef.current = showRoi }, [showRoi])
   useEffect(() => { recaptureSeparatorRef.current = recaptureSeparator }, [recaptureSeparator])
   useEffect(() => { saModeRef.current = saMode }, [saMode])
+  useEffect(() => { instantModeRef.current = instantMode }, [instantMode])
 
   const addLog = useCallback((msg: string) => {
     const ts = new Date().toLocaleTimeString()
     setDebugLog(prev => [`${ts} ${msg}`, ...prev].slice(0, 30))
   }, [])
+
+  const clearSaAnsweringTimeout = useCallback(() => {
+    if (saAnsweringTimeoutRef.current) {
+      clearTimeout(saAnsweringTimeoutRef.current)
+      saAnsweringTimeoutRef.current = null
+    }
+  }, [])
+
+  const beginSaAnswering = useCallback((statusMsg: string) => {
+    setSaAnswering(true)
+    setSaError('')
+    setSaStreamText('')
+    setSaStatusMsg(statusMsg)
+    clearSaAnsweringTimeout()
+    saAnsweringTimeoutRef.current = setTimeout(() => {
+      setSaAnswering(false)
+      setSaError('Answer timed out after 2 minutes. Please try again.')
+      addLog('S&A timeout')
+    }, 120_000)
+  }, [addLog, clearSaAnsweringTimeout])
 
   // ── ROI canvas drawing ──────────────────────────────────────────────────────
   const drawRoiOverlay = useCallback(() => {
@@ -439,7 +467,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
       sock.on('connect',       () => { setSocketStatus('connected'); setStatusMsg('Ready — press Start'); addLog('Connected: ' + sock.id) })
       sock.on('connect_error', (e) => { setSocketStatus('error');     setStatusMsg('Backend unreachable'); addLog('Error: ' + e.message) })
-      sock.on('disconnect',    (r) => { setSocketStatus('connecting'); setStatusMsg('Disconnected');       addLog('Disconnected: ' + r) })
+      sock.on('disconnect',    (r) => {
+        setSocketStatus('connecting'); setStatusMsg('Disconnected'); addLog('Disconnected: ' + r)
+        setProcessingScan(false); setSaAppending(false)
+        clearSaAnsweringTimeout(); setSaAnswering(false)
+      })
 
       sock.on('init_state', (d: any) => {
         setAiEnabled(d.ai_enabled); setNightMode(d.night_mode)
@@ -452,6 +484,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           setRecaptureSeparator(d.auto_recapture_separator)
           recaptureSeparatorRef.current = d.auto_recapture_separator
         }
+        if (d.instant_answer_mode !== undefined) setInstantMode(d.instant_answer_mode)
         if (d.plan_usage) setPlanUsage(d.plan_usage)
         addLog('State received')
       })
@@ -459,6 +492,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       sock.on('status', (d: StatusData) => {
         setStatusMsg(d.msg); addLog('status: ' + d.msg)
         if (typeof d.capturing === 'boolean') setCapturing(d.capturing)
+        if (typeof d.processing === 'boolean') setProcessingScan(d.processing)
         if (d.bulk_block  !== undefined) setBulkBlocks(d.bulk_block)
         if (d.bulk_session !== undefined) setBulkSession(d.bulk_session)
         if ((d as any).limit_hit) setLimitMsg(d.msg)
@@ -473,6 +507,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('result', (d: ResultData) => {
+        setProcessingScan(false)
         setFinalText(prev => {
           if (!prev) return d.text
           const sep = recaptureSeparatorRef.current ? '\n\n────────────────────────\n\n' : '\n\n'
@@ -490,7 +525,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setSaveFilename(prev => prev || `${d.lang || 'code'}_${ts}${ext}`)
         setPendingLang(d.lang)
         // Auto-append to Scan & Answer buffer when in S&A mode
-        if (saModeRef.current && d.text) {
+        if (saModeRef.current && !instantModeRef.current && d.text) {
+          setSaAppending(true)
           sock.emit('sa_append', { text: d.text })
         }
       })
@@ -522,6 +558,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       sock.on('plan_usage', (d: PlanUsage) => setPlanUsage(d))
 
       sock.on('sa_updated', (d: any) => {
+        setSaAppending(false)
         setSaScanCount(d.scan_count)
         setSaLineCount(d.line_count)
         setSaMaxLines(d.max_lines)
@@ -529,10 +566,14 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
       sock.on('sa_error', (d: any) => {
         setSaError(d.msg)
+        setSaAppending(false)
+        setProcessingScan(false)
+        clearSaAnsweringTimeout()
         setSaAnswering(false)
         addLog('S&A error: ' + d.msg)
       })
       sock.on('sa_status', (d: any) => {
+        setSaStatusMsg(d.msg)
         setStatusMsg(d.msg)
         addLog('S&A status: ' + d.msg)
       })
@@ -540,15 +581,22 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         setSaStreamText(prev => prev + d.token)
       })
       sock.on('sa_done', (d: any) => {
+        clearSaAnsweringTimeout()
         setSaAnswering(false)
+        setProcessingScan(false)
+        setSaStatusMsg('')
+        setSaScanCount(0)
+        setSaLineCount(0)
         setSaAnswerText(d.answer)
         setSaAnswerFilename(d.filename)
         setSaAnswerUrl(d.download_url || '')
+        setSaAnswerSource(d.source === 'instant' ? 'instant' : 'accumulated')
         setSaStreamText('')
         setShowSaAnswer(true)
         setStatusMsg('Answer ready: ' + d.filename)
         addLog('S&A done: ' + d.filename)
-        sock.emit('get_plan_usage')
+        if (d.plan_usage) setPlanUsage(d.plan_usage)
+        else sock.emit('get_plan_usage')
       })
       sock.on('sa_cleared', () => {
         setSaScanCount(0)
@@ -588,10 +636,19 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         }
       })
 
+      sock.on('instant_answer_state', (d: { enabled: boolean }) => {
+        setInstantMode(d.enabled)
+        instantModeRef.current = d.enabled
+      })
+
       sock.on('language_set', (d: { language: string }) => setLanguage(d.language === 'auto' ? '' : d.language))
     }
     init()
-    return () => { socketRef.current?.disconnect(); stopStream() }
+    return () => {
+      clearSaAnsweringTimeout()
+      socketRef.current?.disconnect()
+      stopStream()
+    }
   }, []) // eslint-disable-line
 
   // ── Camera / screen capture ──────────────────────────────────────────────────
@@ -656,8 +713,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const handleStop = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null }
     setCapturing(false)
+    setProcessingScan(true)
+    if (instantModeRef.current) beginSaAnswering('Reading question and generating answer...')
     if (socketRef.current?.connected) { addLog('Emitting stop'); socketRef.current.emit('stop') }
-  }, [])
+  }, [beginSaAnswering])
 
   const handleStopRef = useRef(handleStop)
   useEffect(() => { handleStopRef.current = handleStop }, [handleStop])
@@ -683,8 +742,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       ctx.drawImage(video, 0, 0)
     }
     addLog('Emitting photo' + (r ? ' (cropped)' : ''))
+    if (instantModeRef.current) beginSaAnswering('Reading question and generating answer...')
     socketRef.current.emit('photo', { image: canvas.toDataURL('image/jpeg', 0.95) })
-  }, [])
+  }, [beginSaAnswering])
 
   // ── Helpers ──────────────────────────────────────────────────────────────────
   const emit = (ev: string, data?: object) => socketRef.current?.emit(ev, data)
@@ -731,19 +791,34 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
   const handleSaModeToggle = () => {
     const next = !saMode
+    if (next && instantMode) {
+      setInstantMode(false)
+      instantModeRef.current = false
+      emit('set_instant_answer', { enabled: false })
+    }
     setSaMode(next)
     saModeRef.current = next
     if (!next) {
-      // Clear session when turning off
       emit('sa_clear')
       setSaScanCount(0); setSaLineCount(0); setSaError('')
     }
   }
+  const handleInstantModeToggle = () => {
+    const next = !instantMode
+    if (next && saMode) {
+      setSaMode(false)
+      saModeRef.current = false
+      emit('sa_clear')
+      setSaScanCount(0); setSaLineCount(0); setSaError('')
+    }
+    setInstantMode(next)
+    instantModeRef.current = next
+    emit('set_instant_answer', { enabled: next })
+    if (!next) setSaError('')
+  }
   const handleStopAndAnswer = () => {
     if (saAnswering) return
-    setSaAnswering(true)
-    setSaError('')
-    setSaStreamText('')
+    beginSaAnswering('Analyzing content and generating answer...')
     emit('sa_stop_and_answer')
   }
   const handleSaClear = () => {
@@ -1033,6 +1108,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         {glareWarn && <div style={{ ...s.glare, zIndex: 11 }}>⚠ Glare</div>}
         {zoomMsg   && <div style={{ ...s.zoom, zIndex: 11 }}>{zoomMsg}</div>}
         {capturing && <div style={{ ...s.liveDot, zIndex: 11 }}>● LIVE</div>}
+        {processingScan && !capturing && (
+          <div style={{ ...s.liveDot, zIndex: 11, background: 'rgba(99,102,241,0.85)', borderColor: 'rgba(99,102,241,0.5)' }}>
+            ⏳ Processing
+          </div>
+        )}
         {showRoi && !roi && (
           <div style={s.roiHint}>Drag to select region</div>
         )}
@@ -1077,10 +1157,56 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         >
           🧠 {saMode ? 'S&A On' : 'S&A'}
         </button>
+        <button
+          onClick={handleInstantModeToggle}
+          style={{
+            ...s.photoBtn,
+            background: instantMode ? 'rgba(234,179,8,0.22)' : 'rgba(255,255,255,0.08)',
+            borderColor: instantMode ? 'rgba(234,179,8,0.55)' : 'rgba(255,255,255,0.15)',
+            color: instantMode ? '#fde047' : '#e2e8f0',
+            fontWeight: instantMode ? 700 : 500,
+          }}
+          title="Instant Answer — point camera at a question/MCQ and capture for immediate AI answer"
+        >
+          ⚡ {instantMode ? 'Instant On' : 'Instant'}
+        </button>
       </div>
 
+      {/* Instant Answer panel */}
+      {instantMode && (
+        <div style={{
+          margin: '0 0.75rem',
+          background: 'rgba(234,179,8,0.08)',
+          border: '1px solid rgba(234,179,8,0.3)',
+          borderRadius: 12,
+          padding: '0.75rem 1rem',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+            <div>
+              <span style={{ fontSize: '0.8rem', color: '#fde047', fontWeight: 700 }}>⚡ Instant Answer</span>
+              <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: 4 }}>
+                Point at a question or MCQ, then tap <strong style={{ color: '#fde047' }}>📷 Photo</strong> or <strong style={{ color: '#fde047' }}>Start → Stop</strong>
+              </div>
+            </div>
+            {saAnswering && (
+              <span style={{ fontSize: '0.72rem', color: '#fde047' }}>⏳ {saStatusMsg || 'Answering...'}</span>
+            )}
+          </div>
+          {saError && instantMode && (
+            <div style={{ marginTop: 6, fontSize: '0.75rem', color: '#fca5a5', background: 'rgba(239,68,68,0.1)', borderRadius: 6, padding: '4px 8px' }}>
+              ⚠ {saError}
+            </div>
+          )}
+          {planUsage && planUsage.scan_answer_day_limit > 0 && (
+            <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)' }}>
+              Uses S&A quota: {planUsage.scan_answer_today}/{planUsage.scan_answer_day_limit} today · Claude Haiku
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Scan & Answer panel */}
-      {saMode && (
+      {saMode && !instantMode && (
         <div style={{
           margin: '0 0.75rem',
           background: 'rgba(16,185,129,0.08)',
@@ -1096,9 +1222,24 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
                   {saScanCount} scan{saScanCount !== 1 ? 's' : ''} · {saLineCount}/{saMaxLines || (planUsage?.scan_answer_max_lines ?? '?')} lines
                 </span>
               )}
-              {saScanCount === 0 && (
+              {saScanCount === 0 && !capturing && !processingScan && !saAppending && (
                 <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
                   Scan to add content, then click Stop & Answer
+                </span>
+              )}
+              {capturing && (
+                <span style={{ fontSize: '0.72rem', color: '#fde047' }}>
+                  📷 Scanning live...
+                </span>
+              )}
+              {processingScan && !capturing && (
+                <span style={{ fontSize: '0.72rem', color: '#a5b4fc' }}>
+                  ⏳ Processing scan...
+                </span>
+              )}
+              {saAppending && (
+                <span style={{ fontSize: '0.72rem', color: '#6ee7b7' }}>
+                  📥 Adding to buffer...
                 </span>
               )}
             </div>
@@ -1132,9 +1273,17 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               )}
             </div>
           )}
-          {saAnswering && saStreamText && (
-            <div style={{ marginTop: 8, fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace', maxHeight: 80, overflowY: 'auto' }}>
-              {saStreamText.slice(-300)}
+          {saAnswering && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: '0.75rem', color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span>⏳</span>
+                {saStatusMsg || 'Generating answer...'}
+              </div>
+              {saStreamText && (
+                <div style={{ marginTop: 6, fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace', maxHeight: 80, overflowY: 'auto' }}>
+                  {saStreamText.slice(-300)}
+                </div>
+              )}
             </div>
           )}
           {/* Daily limit indicator */}
@@ -1265,7 +1414,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
         <pre style={s.output}>
           {outputText
-            || (capturing ? 'Waiting for frames...'
+            || (processingScan ? statusMsg || 'Processing scan...'
+            : capturing ? 'Waiting for frames...'
             : socketStatus === 'connected' ? 'Press Start or 📷 Photo to capture code'
             : 'Connecting to backend...')}
         </pre>
@@ -1340,7 +1490,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         <div style={s.backdrop} onClick={() => setShowSaAnswer(false)}>
           <div style={{ ...s.modal, maxWidth: 680, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1rem', color: '#34d399' }}>🧠 Scan & Answer Result</h3>
+              <h3 style={{ margin: 0, fontSize: '1rem', color: saAnswerSource === 'instant' ? '#fde047' : '#34d399' }}>
+                {saAnswerSource === 'instant' ? '⚡ Instant Answer' : '🧠 Scan & Answer Result'}
+              </h3>
               <button onClick={() => setShowSaAnswer(false)} style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: '1.2rem' }}>✕</button>
             </div>
             <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.75rem', margin: '0 0 0.75rem' }}>
