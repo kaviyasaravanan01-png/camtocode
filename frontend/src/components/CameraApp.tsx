@@ -161,7 +161,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [recaptureSessionActive, setRecaptureSessionActive] = useState(false)
   const [recaptureSeparator,    setRecaptureSeparator]    = useState(false)
   const recaptureRemainingRef   = useRef(0)
+  const recapturePausedRef      = useRef(false)
   const recaptureSeparatorRef   = useRef(false)  // readable inside socket closure
+  const outputWrapRef           = useRef<HTMLDivElement>(null)
+  const cameraEnlargedRef         = useRef(false)
+  const [cameraEnlarged,         setCameraEnlarged]         = useState(false)
 
   // ROI state
   const [roi,     setRoi]     = useState<ROI | null>(null)
@@ -174,6 +178,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   useEffect(() => { roiRef.current = roi }, [roi])
   useEffect(() => { showRoiRef.current = showRoi }, [showRoi])
   useEffect(() => { recaptureSeparatorRef.current = recaptureSeparator }, [recaptureSeparator])
+  useEffect(() => { recapturePausedRef.current = recapturePaused }, [recapturePaused])
+  useEffect(() => { cameraEnlargedRef.current = cameraEnlarged }, [cameraEnlarged])
   useEffect(() => { saModeRef.current = saMode }, [saMode])
   useEffect(() => { instantModeRef.current = instantMode }, [instantMode])
 
@@ -181,6 +187,20 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     const ts = new Date().toLocaleTimeString()
     setDebugLog(prev => [`${ts} ${msg}`, ...prev].slice(0, 30))
   }, [])
+
+  const scrollToOutput = useCallback(() => {
+    setTimeout(() => {
+      outputWrapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 350)
+  }, [])
+
+  const exitFocusAndScroll = useCallback(() => {
+    if (cameraEnlargedRef.current) {
+      setCameraEnlarged(false)
+      cameraEnlargedRef.current = false
+      scrollToOutput()
+    }
+  }, [scrollToOutput])
 
   const clearSaAnsweringTimeout = useCallback(() => {
     if (saAnsweringTimeoutRef.current) {
@@ -539,6 +559,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         const ts  = new Date().toISOString().slice(0, 10).replace(/-/g, '')
         setSaveFilename(prev => prev || `${d.lang || 'code'}_${ts}${ext}`)
         setPendingLang(d.lang)
+        if (cameraEnlargedRef.current) {
+          setCameraEnlarged(false)
+          cameraEnlargedRef.current = false
+          setTimeout(() => {
+            outputWrapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+          }, 200)
+        }
         // Auto-append to Scan & Answer buffer when in S&A mode
         if (saModeRef.current && !instantModeRef.current && d.text) {
           setSaAppending(true)
@@ -621,12 +648,30 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('recapture_countdown', (d: { remaining: number; total: number }) => {
+        if (recapturePausedRef.current) return
+        setRecapturePaused(false)
         setRecaptureCountdown(d.remaining)
         setRecaptureTotal(d.total)
         recaptureRemainingRef.current = d.remaining
       })
 
+      sock.on('recapture_paused', (d: { remaining: number; total: number }) => {
+        recapturePausedRef.current = true
+        setRecapturePaused(true)
+        setRecaptureCountdown(d.remaining)
+        setRecaptureTotal(d.total)
+        recaptureRemainingRef.current = d.remaining
+        addLog('recapture paused at ' + d.remaining)
+      })
+
+      sock.on('recapture_resumed', () => {
+        recapturePausedRef.current = false
+        setRecapturePaused(false)
+        addLog('recapture resumed')
+      })
+
       sock.on('recapture_trigger', () => {
+        recapturePausedRef.current = false
         setRecaptureSessionActive(true)
         setRecaptureCountdown(0)
         setRecapturePaused(false)
@@ -637,6 +682,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('recapture_cancelled', () => {
+        recapturePausedRef.current = false
         setRecaptureCountdown(0)
         setRecapturePaused(false)
         setRecaptureSessionActive(false)
@@ -749,7 +795,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     setProcessingScan(true)
     if (instantModeRef.current) beginSaAnswering('Reading question and generating answer...')
     if (socketRef.current?.connected) { addLog('Emitting stop'); socketRef.current.emit('stop') }
-  }, [beginSaAnswering])
+    exitFocusAndScroll()
+  }, [beginSaAnswering, exitFocusAndScroll])
 
   const handleStopRef = useRef(handleStop)
   useEffect(() => { handleStopRef.current = handleStop }, [handleStop])
@@ -842,19 +889,33 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     emit('set_recapture_separator', { enabled: n })
   }
   const handlePauseRecapture = () => {
+    const remaining = recaptureRemainingRef.current || recaptureCountdown || recaptureInterval
+    recapturePausedRef.current = true
     setRecapturePaused(true)
-    emit('pause_recapture')
+    setRecaptureCountdown(remaining)
+    emit('pause_recapture', { remaining })
   }
   const handleResumeRecapture = () => {
+    const remaining = recaptureRemainingRef.current || recaptureCountdown || recaptureInterval
+    recapturePausedRef.current = false
     setRecapturePaused(false)
-    emit('resume_recapture', { remaining: recaptureRemainingRef.current || recaptureInterval })
+    emit('resume_recapture', { remaining })
   }
   const handleStopRecaptureSession = () => {
     emit('set_auto_recapture', { enabled: false })
     setAutoRecapture(false)
+    recapturePausedRef.current = false
     setRecaptureCountdown(0)
     setRecapturePaused(false)
     setRecaptureSessionActive(false)
+    exitFocusAndScroll()
+  }
+  const toggleCameraEnlarged = () => {
+    setCameraEnlarged(v => {
+      const next = !v
+      cameraEnlargedRef.current = next
+      return next
+    })
   }
 
   const handleSaModeToggle = () => {
@@ -919,9 +980,9 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const videoFit    = (showRoi || fitScreen) ? 'contain' : 'cover'
 
   return (
-    <div className="ctc-app" style={s.root}>
+    <div className={`ctc-app${cameraEnlarged ? ' ctc-app--focus' : ''}`} style={s.root}>
       {/* Header */}
-      <div className="ctc-header" style={s.header}>
+      <div className="ctc-header ctc-hide-in-focus" style={s.header}>
         <span className="ctc-logo" style={s.logo}>CamToCode</span>
         <div className="ctc-header-nav" style={s.hRight}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
@@ -950,13 +1011,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       </div>
 
       {/* Plan usage — collapsible accordion */}
-      <UsageAccordion usage={planUsage} limitMsg={limitMsg || undefined} />
+      <div className="ctc-hide-in-focus"><UsageAccordion usage={planUsage} limitMsg={limitMsg || undefined} /></div>
 
       {/* Legacy inline limit nudge removed — handled inside UsageAccordion */}
 
       {/* Debug log */}
       {showDebug && (
-        <div style={s.debugPanel}>
+        <div className="ctc-hide-in-focus" style={s.debugPanel}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
             <span style={{ fontWeight: 700, fontSize: '0.72rem', color: '#a78bfa' }}>
               Debug — {socketStatus} — {BACKEND_URL}
@@ -974,7 +1035,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
       {/* Settings */}
       {showSettings && (
-        <div style={s.settingsPanel}>
+        <div className="ctc-hide-in-focus" style={s.settingsPanel}>
           {/* Settings header */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
             <span style={{ fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.35)' }}>Settings</span>
@@ -1073,7 +1134,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       )}
 
       {/* Video toolbar + AI model row */}
-      <div className="ctc-toolbar-block">
+      <div className="ctc-toolbar-block ctc-hide-in-focus">
         <div className="ctc-toolbar" style={s.toolbar}>
           <button onClick={videoMode === 'camera' ? startScreenCapture : startCamera} style={s.toolBtn}>
             {videoMode === 'camera' ? '🖥 Screen' : '📷 Cam'}
@@ -1103,7 +1164,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
       {/* ROI preset bar — shown when region mode is active */}
       {showRoi && (
-        <div style={s.roiBar}>
+        <div className="ctc-hide-in-focus" style={s.roiBar}>
           <span style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>Presets:</span>
           {ROI_PRESETS.map(p => (
             <button key={p.label} onClick={() => applyRoiPreset(p.roi)} style={s.roiPresetBtn}>{p.label}</button>
@@ -1116,7 +1177,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
       {/* Quality tip banner — shown once, dismissible */}
       {showQualityTip && (
-        <div style={{
+        <div className="ctc-hide-in-focus" style={{
           background: 'linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.12))',
           border: '1px solid rgba(99,102,241,0.35)',
           borderRadius: 10,
@@ -1149,7 +1210,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
       {/* AI fallback notification */}
       {fallbackNotice && (
-        <div style={{
+        <div className="ctc-hide-in-focus" style={{
           margin: '0 0.75rem',
           background: 'rgba(251,191,36,0.12)',
           border: '1px solid rgba(251,191,36,0.4)',
@@ -1167,7 +1228,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       )}
 
       {/* Scan mode — compact accordion */}
-      <div className="ctc-mode-acc" style={{ borderColor: scanModeInfo.border, background: scanModeInfo.bg }}>
+      <div className="ctc-mode-acc ctc-hide-in-focus" style={{ borderColor: scanModeInfo.border, background: scanModeInfo.bg }}>
         <button
           type="button"
           className="ctc-mode-acc-head"
@@ -1199,8 +1260,24 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         )}
       </div>
 
+      {/* Focus / scan zone — camera + controls + recapture (fullscreen when enlarged) */}
+      <div className={`ctc-scan-zone${cameraEnlarged ? ' ctc-scan-zone--enlarged' : ''}`}>
+        {cameraEnlarged && (
+          <div className="ctc-focus-bar">
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'rgba(255,255,255,0.7)' }}>Focus Mode</span>
+            <button type="button" className="ctc-focus-close" onClick={() => { setCameraEnlarged(false); cameraEnlargedRef.current = false }}>
+              ✕ Close
+            </button>
+          </div>
+        )}
+
       {/* Video container */}
       <div ref={camWrapRef} className="ctc-cam-wrap" style={s.camWrap}>
+        {!cameraEnlarged && (
+          <button type="button" className="ctc-enlarge-btn" onClick={toggleCameraEnlarged} title="Enlarge camera to full screen">
+            ⛶ Enlarge
+          </button>
+        )}
         <video ref={videoRef} playsInline muted style={{ ...s.video, objectFit: videoFit as any }} />
         <canvas ref={canvasRef} style={{ display: 'none' }} />
         {/* ROI selection canvas — always mounted, only interactive when showRoi */}
@@ -1293,74 +1370,98 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </button>
       </div>
 
-      {/* Instant Answer panel */}
+      {/* Auto Re-capture Countdown Banner — unified (running or paused) */}
+      {(recaptureCountdown > 0 || recapturePaused) && autoRecapture && (
+        <div className="ctc-recapture-banner" style={{
+          background: recapturePaused ? 'rgba(251,191,36,0.12)' : 'rgba(99,102,241,0.15)',
+          border: recapturePaused ? '1px solid rgba(251,191,36,0.4)' : '1px solid rgba(99,102,241,0.4)',
+          borderRadius: 10,
+          padding: '0.4rem 0.65rem',
+          margin: cameraEnlarged ? '0 0.5rem 0.5rem' : '0.25rem 0.65rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          flexWrap: 'wrap' as const,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.68rem', color: recapturePaused ? '#fbbf24' : 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              {recapturePaused ? '⏸ Paused' : 'Auto-capture in'}
+            </span>
+            <span className="ctc-recapture-count" style={{
+              fontSize: '1.25rem',
+              fontWeight: 900,
+              color: recapturePaused ? '#fbbf24' : '#818cf8',
+              lineHeight: 1,
+              minWidth: 24,
+              textAlign: 'center',
+            }}>
+              {recaptureCountdown}
+            </span>
+            <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)' }}>s</span>
+            {recaptureSessionActive && !recapturePaused && (
+              <span style={{ fontSize: '0.62rem', background: 'rgba(34,197,94,0.15)', color: '#4ade80', borderRadius: 4, padding: '1px 5px' }}>
+                Running
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {recapturePaused ? (
+              <button onClick={handleResumeRecapture} style={{
+                background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
+                color: '#4ade80', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+              }}>▶ Resume</button>
+            ) : (
+              <button onClick={handlePauseRecapture} style={{
+                background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)',
+                color: '#fbbf24', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+              }}>⏸ Pause</button>
+            )}
+            <button onClick={handleStopRecaptureSession} style={{
+              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
+              color: '#f87171', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+            }}>■ Stop</button>
+          </div>
+        </div>
+      )}
+      </div>{/* end ctc-scan-zone */}
+
+      {/* Instant Answer panel — hidden in focus mode */}
       {instantMode && (
-        <div style={{
-          margin: '0 0.75rem',
+        <div className="ctc-hide-in-focus" style={{
+          margin: '0 0.65rem',
           background: 'rgba(234,179,8,0.08)',
           border: '1px solid rgba(234,179,8,0.3)',
           borderRadius: 12,
-          padding: '0.75rem 1rem',
+          padding: '0.65rem 0.85rem',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-            <div>
-              <span style={{ fontSize: '0.8rem', color: '#fde047', fontWeight: 700 }}>⚡ Instant Answer</span>
-              <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: 4 }}>
-                Point at a question or MCQ, then tap <strong style={{ color: '#fde047' }}>📷 Photo</strong> or <strong style={{ color: '#fde047' }}>Start → Stop</strong>
-              </div>
-            </div>
+            <span style={{ fontSize: '0.78rem', color: '#fde047', fontWeight: 700 }}>⚡ Instant Answer active</span>
             {saAnswering && (
               <span style={{ fontSize: '0.72rem', color: '#fde047' }}>⏳ {saStatusMsg || 'Answering...'}</span>
             )}
           </div>
           {saError && instantMode && (
-            <div style={{ marginTop: 6, fontSize: '0.75rem', color: '#fca5a5', background: 'rgba(239,68,68,0.1)', borderRadius: 6, padding: '4px 8px' }}>
-              ⚠ {saError}
-            </div>
-          )}
-          {planUsage && planUsage.scan_answer_day_limit > 0 && (
-            <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)' }}>
-              Uses S&A quota: {planUsage.scan_answer_today}/{planUsage.scan_answer_day_limit} today · {modelLabel}
-            </div>
+            <div style={{ marginTop: 6, fontSize: '0.75rem', color: '#fca5a5' }}>⚠ {saError}</div>
           )}
         </div>
       )}
 
-      {/* Scan & Answer panel */}
+      {/* Scan & Answer panel — hidden in focus mode */}
       {saMode && !instantMode && (
-        <div style={{
-          margin: '0 0.75rem',
+        <div className="ctc-hide-in-focus" style={{
+          margin: '0 0.65rem',
           background: 'rgba(16,185,129,0.08)',
           border: '1px solid rgba(16,185,129,0.3)',
           borderRadius: 12,
-          padding: '0.75rem 1rem',
+          padding: '0.65rem 0.85rem',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ fontSize: '0.8rem', color: '#34d399', fontWeight: 700 }}>🧠 Scan & Answer</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '0.78rem', color: '#34d399', fontWeight: 700 }}>🧠 Scan & Answer</span>
               {saScanCount > 0 && (
                 <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.55)', background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '1px 8px' }}>
                   {saScanCount} scan{saScanCount !== 1 ? 's' : ''} · {saLineCount}/{saMaxLines || (planUsage?.scan_answer_max_lines ?? '?')} lines
-                </span>
-              )}
-              {saScanCount === 0 && !capturing && !processingScan && !saAppending && (
-                <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)' }}>
-                  Scan to add content, then click Stop & Answer
-                </span>
-              )}
-              {capturing && (
-                <span style={{ fontSize: '0.72rem', color: '#fde047' }}>
-                  📷 Scanning live...
-                </span>
-              )}
-              {processingScan && !capturing && (
-                <span style={{ fontSize: '0.72rem', color: '#a5b4fc' }}>
-                  ⏳ Processing scan...
-                </span>
-              )}
-              {saAppending && (
-                <span style={{ fontSize: '0.72rem', color: '#6ee7b7' }}>
-                  📥 Adding to buffer...
                 </span>
               )}
             </div>
@@ -1377,7 +1478,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
                 style={{
                   background: saScanCount === 0 || saAnswering ? 'rgba(16,185,129,0.2)' : 'linear-gradient(135deg,#10b981,#059669)',
                   border: 'none', color: '#fff', borderRadius: 8,
-                  padding: '0.35rem 0.85rem', fontSize: '0.8rem', fontWeight: 700,
+                  padding: '0.3rem 0.75rem', fontSize: '0.78rem', fontWeight: 700,
                   cursor: saScanCount === 0 || saAnswering ? 'not-allowed' : 'pointer',
                   opacity: saScanCount === 0 ? 0.5 : 1,
                 }}
@@ -1387,115 +1488,12 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             </div>
           </div>
           {saError && (
-            <div style={{ marginTop: 6, fontSize: '0.75rem', color: '#fca5a5', background: 'rgba(239,68,68,0.1)', borderRadius: 6, padding: '4px 8px' }}>
-              ⚠ {saError}
-              {saError.includes('not included') && (
-                <a href="/account" style={{ color: '#818cf8', marginLeft: 8, textDecoration: 'none' }}>Upgrade →</a>
-              )}
-            </div>
-          )}
-          {saAnswering && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ fontSize: '0.75rem', color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span>⏳</span>
-                {saStatusMsg || 'Generating answer...'}
-              </div>
-              {saStreamText && (
-                <div style={{ marginTop: 6, fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)', fontFamily: 'monospace', maxHeight: 80, overflowY: 'auto' }}>
-                  {saStreamText.slice(-300)}
-                </div>
-              )}
-            </div>
-          )}
-          {/* Daily limit indicator */}
-          {planUsage && planUsage.scan_answer_day_limit > 0 && (
-            <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)' }}>
-              {planUsage.scan_answer_today}/{planUsage.scan_answer_day_limit} S&A used today · {planUsage.scan_answer_max_lines} line buffer
-            </div>
+            <div style={{ marginTop: 6, fontSize: '0.75rem', color: '#fca5a5' }}>⚠ {saError}</div>
           )}
         </div>
       )}
 
-      {/* Auto Re-capture Countdown Banner */}
-      {recaptureCountdown > 0 && (
-        <div className="ctc-recapture-banner" style={{
-          background: 'rgba(99,102,241,0.15)',
-          border: '1px solid rgba(99,102,241,0.4)',
-          borderRadius: 10,
-          padding: '0.45rem 0.75rem',
-          margin: '0 0.75rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 10,
-          flexWrap: 'wrap' as const,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Auto-capture in
-            </span>
-            <span className="ctc-recapture-count" style={{
-              fontSize: '1.35rem',
-              fontWeight: 900,
-              color: '#818cf8',
-              lineHeight: 1,
-              minWidth: 28,
-              textAlign: 'center',
-            }}>
-              {recaptureCountdown}
-            </span>
-            <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)' }}>s</span>
-            {recaptureSessionActive && (
-              <span style={{ fontSize: '0.65rem', background: 'rgba(34,197,94,0.15)', color: '#4ade80', borderRadius: 4, padding: '1px 5px' }}>
-                Running
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {!recapturePaused ? (
-              <button onClick={handlePauseRecapture} style={{
-                background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)',
-                color: '#fbbf24', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-              }}>⏸</button>
-            ) : (
-              <button onClick={handleResumeRecapture} style={{
-                background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
-                color: '#4ade80', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-              }}>▶</button>
-            )}
-            <button onClick={handleStopRecaptureSession} style={{
-              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
-              color: '#f87171', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-            }}>■ Stop</button>
-          </div>
-        </div>
-      )}
-      {recapturePaused && recaptureCountdown === 0 && (
-        <div className="ctc-recapture-banner" style={{
-          background: 'rgba(251,191,36,0.1)',
-          border: '1px solid rgba(251,191,36,0.3)',
-          borderRadius: 10,
-          padding: '0.4rem 0.75rem',
-          margin: '0 0.75rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 10,
-        }}>
-          <span style={{ fontSize: '0.75rem', color: '#fbbf24' }}>⏸ Auto re-capture paused</span>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button onClick={handleResumeRecapture} style={{
-              background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
-              color: '#4ade80', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-            }}>▶</button>
-            <button onClick={handleStopRecaptureSession} style={{
-              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
-              color: '#f87171', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-            }}>■</button>
-          </div>
-        </div>
-      )}
-      <div style={s.statusBar}>
+      <div className="ctc-hide-in-focus" style={s.statusBar}>
         <span style={{ flex: 1 }}>{statusMsg}</span>
         {lastLang && <span style={s.langTag}>{lastLang}{aiUsed ? ' ✨' : ''}</span>}
         {roi && <span style={{ ...s.langTag, background: 'rgba(99,102,241,0.2)', color: '#a5b4fc' }}>
@@ -1506,7 +1504,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       </div>
 
       {/* Output */}
-      <div className="ctc-output-wrap" style={s.outputWrap}>
+      <div ref={outputWrapRef} className="ctc-output-wrap" style={s.outputWrap}>
         <div style={{ ...s.outputHeader, position: 'sticky', top: 0, background: 'rgba(10,10,20,0.95)', zIndex: 2 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {capturing && liveText

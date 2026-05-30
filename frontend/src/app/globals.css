@@ -260,3 +260,90 @@ code, pre {
     display: none;
   }
 }
+
+/* ── Focus / Enlarge camera mode ── */
+.ctc-app--focus {
+  overflow: hidden;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.ctc-app--focus .ctc-hide-in-focus {
+  display: none !important;
+}
+
+.ctc-scan-zone {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ctc-scan-zone--enlarged {
+  position: fixed;
+  inset: 0;
+  z-index: 600;
+  background: #0a0a14;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ctc-focus-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.45rem 0.65rem;
+  background: rgba(0,0,0,0.5);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  flex-shrink: 0;
+}
+
+.ctc-focus-close {
+  background: rgba(255,255,255,0.08) !important;
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  color: #e2e8f0 !important;
+  border-radius: 7px !important;
+  padding: 0.25rem 0.6rem !important;
+  font-size: 0.72rem !important;
+  cursor: pointer;
+}
+
+.ctc-scan-zone--enlarged .ctc-cam-wrap {
+  flex: 1 1 auto;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  width: 100% !important;
+}
+
+.ctc-scan-zone--enlarged .ctc-controls {
+  flex-shrink: 0;
+  padding: 0.5rem 0.65rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(0,0,0,0.45);
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.ctc-scan-zone--enlarged .ctc-recapture-banner {
+  flex-shrink: 0;
+  margin: 0 0.5rem 0.35rem !important;
+}
+
+.ctc-enlarge-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 12;
+  background: rgba(0,0,0,0.55) !important;
+  border: 1px solid rgba(255,255,255,0.2) !important;
+  color: #e2e8f0 !important;
+  border-radius: 7px !important;
+  padding: 0.25rem 0.55rem !important;
+  font-size: 0.68rem !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+}
+
+.ctc-enlarge-btn:active {
+  background: rgba(99,102,241,0.4) !important;
+}

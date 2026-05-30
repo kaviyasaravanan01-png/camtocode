@@ -550,6 +550,8 @@ class UserSession:
         self.auto_recapture_interval   = 5      # seconds: 3,5,8,10,12,15,20
         self.auto_recapture_active     = False  # True while countdown thread running
         self.auto_recapture_separator  = False  # Insert divider line between scans (shared with auto-capture)
+        self.recapture_paused_remaining = 0
+        self._recapture_stop: threading.Event | None = None
         self.next_start_is_recapture   = False  # Set before recapture trigger so on_start() skips file clear
         self.language_hint         = ""
         self.llm_model_key         = "haiku"
@@ -596,6 +598,66 @@ def get_session(sid: str) -> UserSession:
         if sid not in _sessions:
             _sessions[sid] = UserSession(sid)
         return _sessions[sid]
+
+
+def _cancel_recapture_timer(sess: UserSession, paused_remaining: int | None = None):
+    """Stop any running recapture countdown thread."""
+    stop = getattr(sess, "_recapture_stop", None)
+    if stop:
+        stop.set()
+    if paused_remaining is not None:
+        sess.recapture_paused_remaining = paused_remaining
+    sess.auto_recapture_active = False
+
+
+def _start_recapture_countdown(sid: str, sess: UserSession, remaining: int | None = None):
+    """Start auto-recapture countdown; cancels any existing timer first."""
+    _cancel_recapture_timer(sess)
+    if not sess.auto_recapture_enabled:
+        return
+
+    interval = sess.auto_recapture_interval
+    start = max(1, int(remaining if remaining is not None else interval))
+    stop_event = threading.Event()
+    sess._recapture_stop = stop_event
+    sess.auto_recapture_active = True
+
+    def run():
+        import time
+        r = start
+        while r >= 1:
+            if not sess.auto_recapture_enabled:
+                socketio.emit("recapture_cancelled", {}, to=sid)
+                sess.auto_recapture_active = False
+                return
+            if stop_event.is_set():
+                sess.recapture_paused_remaining = r
+                sess.auto_recapture_active = False
+                socketio.emit("recapture_paused", {"remaining": r, "total": interval}, to=sid)
+                return
+            socketio.emit("recapture_countdown", {"remaining": r, "total": interval}, to=sid)
+            if stop_event.wait(1.0):
+                sess.recapture_paused_remaining = r
+                sess.auto_recapture_active = False
+                socketio.emit("recapture_paused", {"remaining": r, "total": interval}, to=sid)
+                return
+            r -= 1
+
+        if not sess.auto_recapture_enabled:
+            socketio.emit("recapture_cancelled", {}, to=sid)
+            sess.auto_recapture_active = False
+            return
+        if stop_event.is_set():
+            sess.auto_recapture_active = False
+            return
+
+        sess.auto_recapture_active = False
+        socketio.emit("recapture_countdown", {"remaining": 0, "total": interval}, to=sid)
+        time.sleep(0.2)
+        if sess.auto_recapture_enabled and not stop_event.is_set():
+            socketio.emit("recapture_trigger", {}, to=sid)
+
+    threading.Thread(target=run, daemon=True).start()
 
 def remove_session(sid: str):
     with _sessions_lock:
@@ -2402,25 +2464,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
             _emit_to(sid, "status", {"processing": False, "msg": "Auto-cleared for next session"})
 
         if sess.auto_recapture_enabled and not sess.auto_recapture_active:
-            sess.auto_recapture_active = True
-            interval = sess.auto_recapture_interval
-
-            def countdown_timer():
-                import time
-                for remaining in range(interval, 0, -1):
-                    if not sess.auto_recapture_active:
-                        if not sess.auto_recapture_enabled:
-                            socketio.emit("recapture_cancelled", {}, to=sid)
-                        return
-                    socketio.emit("recapture_countdown", {"remaining": remaining, "total": interval}, to=sid)
-                    time.sleep(1)
-                if sess.auto_recapture_active and sess.auto_recapture_enabled:
-                    sess.auto_recapture_active = False
-                    socketio.emit("recapture_countdown", {"remaining": 0, "total": interval}, to=sid)
-                    time.sleep(0.2)
-                    socketio.emit("recapture_trigger", {}, to=sid)
-
-            threading.Thread(target=countdown_timer, daemon=True).start()
+            _start_recapture_countdown(sid, sess)
     finally:
         sess._stop_processing = False
 
@@ -2725,7 +2769,7 @@ def on_set_auto_recapture(data):
     sess = get_session(request.sid)
     sess.auto_recapture_enabled = bool(data.get("enabled", False))
     if not sess.auto_recapture_enabled:
-        sess.auto_recapture_active = False
+        _cancel_recapture_timer(sess)
     emit("auto_recapture_state", {"enabled": sess.auto_recapture_enabled})
 
 
@@ -2751,39 +2795,23 @@ def on_set_recapture_separator(data):
     sess.auto_recapture_separator = bool(data.get("enabled", True))
 
 @socketio.on("pause_recapture")
-def on_pause_recapture():
+def on_pause_recapture(data=None):
     sess = get_session(request.sid)
-    sess.auto_recapture_active = False
+    _d = data if isinstance(data, dict) else {}
+    remaining = int(_d.get("remaining", sess.recapture_paused_remaining or sess.auto_recapture_interval))
+    _cancel_recapture_timer(sess, paused_remaining=remaining)
+    emit("recapture_paused", {"remaining": remaining, "total": sess.auto_recapture_interval})
 
 
 @socketio.on("resume_recapture")
-def on_resume_recapture(data):
-    if not isinstance(data, dict):
-        data = {}
+def on_resume_recapture(data=None):
+    _d = data if isinstance(data, dict) else {}
     sess = get_session(request.sid)
     if not sess.auto_recapture_enabled:
         return
-    sess.auto_recapture_active = True
-    remaining = int(data.get("remaining", sess.auto_recapture_interval))
-    client_sid = request.sid
-    interval   = sess.auto_recapture_interval
-
-    def countdown_timer():
-        import time
-        for r in range(remaining, 0, -1):
-            if not sess.auto_recapture_active:
-                if not sess.auto_recapture_enabled:
-                    socketio.emit("recapture_cancelled", {}, to=client_sid)
-                return
-            socketio.emit("recapture_countdown", {"remaining": r, "total": interval}, to=client_sid)
-            time.sleep(1)
-        if sess.auto_recapture_active and sess.auto_recapture_enabled:
-            sess.auto_recapture_active = False
-            socketio.emit("recapture_countdown", {"remaining": 0, "total": interval}, to=client_sid)
-            time.sleep(0.2)
-            socketio.emit("recapture_trigger", {}, to=client_sid)
-
-    threading.Thread(target=countdown_timer, daemon=True).start()
+    remaining = int(_d.get("remaining", sess.recapture_paused_remaining or sess.auto_recapture_interval))
+    _start_recapture_countdown(request.sid, sess, remaining)
+    emit("recapture_resumed", {"remaining": remaining, "total": sess.auto_recapture_interval})
 
 
 @socketio.on("set_model")
