@@ -278,14 +278,22 @@ code, pre {
   min-width: 0;
 }
 
+/* Normal mode: dock is transparent wrapper */
+.ctc-focus-dock {
+  display: contents;
+}
+
 .ctc-scan-zone--enlarged {
   position: fixed;
   inset: 0;
   z-index: 600;
   background: #0a0a14;
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 4fr) minmax(0, 1fr);
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
 }
 
 .ctc-focus-bar {
@@ -293,9 +301,10 @@ code, pre {
   align-items: center;
   justify-content: space-between;
   padding: 0.45rem 0.65rem;
-  background: rgba(0,0,0,0.5);
+  padding-top: calc(0.45rem + env(safe-area-inset-top, 0px));
+  background: rgba(0,0,0,0.6);
   border-bottom: 1px solid rgba(255,255,255,0.08);
-  flex-shrink: 0;
+  grid-row: 1;
 }
 
 .ctc-focus-close {
@@ -308,24 +317,54 @@ code, pre {
   cursor: pointer;
 }
 
+/* Camera ~80% of space below header (4fr of 4+1) */
 .ctc-scan-zone--enlarged .ctc-cam-wrap {
-  flex: 1 1 auto;
-  height: auto !important;
+  grid-row: 2;
+  flex: none !important;
+  height: 100% !important;
+  max-height: 100% !important;
   min-height: 0 !important;
-  max-height: none !important;
   width: 100% !important;
+}
+
+/* Bottom dock ~20% — always shows Start / Photo / S&A / Instant */
+.ctc-scan-zone--enlarged .ctc-focus-dock {
+  display: flex;
+  flex-direction: column;
+  grid-row: 3;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 0;
+  background: rgba(0,0,0,0.92);
+  border-top: 1px solid rgba(255,255,255,0.12);
+  padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ctc-scan-zone--enlarged .ctc-controls {
   flex-shrink: 0;
-  padding: 0.5rem 0.65rem calc(0.5rem + env(safe-area-inset-bottom, 0px));
-  background: rgba(0,0,0,0.45);
-  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 0.25rem 0.35rem !important;
+  margin: 0 !important;
+  gap: 5px !important;
+  background: transparent;
+  border-top: none;
+  justify-content: center;
+  flex-wrap: wrap;
 }
 
 .ctc-scan-zone--enlarged .ctc-recapture-banner {
   flex-shrink: 0;
-  margin: 0 0.5rem 0.35rem !important;
+  margin: 0 0 0.25rem !important;
+  padding: 0.3rem 0.5rem !important;
+}
+
+.ctc-scan-zone--enlarged .ctc-ctrl-btn,
+.ctc-scan-zone--enlarged .ctc-start-btn,
+.ctc-scan-zone--enlarged .ctc-stop-btn {
+  padding: 0.38rem 0.65rem !important;
+  font-size: 0.75rem !important;
+  min-width: 0 !important;
 }
 
 .ctc-enlarge-btn {

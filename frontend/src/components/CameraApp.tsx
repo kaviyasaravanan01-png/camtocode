@@ -1310,6 +1310,63 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         )}
       </div>
 
+      {/* Bottom dock — controls + recapture (always visible in focus mode) */}
+      <div className="ctc-focus-dock">
+      {/* Auto Re-capture Countdown Banner — unified (running or paused) */}
+      {(recaptureCountdown > 0 || recapturePaused) && autoRecapture && (
+        <div className="ctc-recapture-banner" style={{
+          background: recapturePaused ? 'rgba(251,191,36,0.12)' : 'rgba(99,102,241,0.15)',
+          border: recapturePaused ? '1px solid rgba(251,191,36,0.4)' : '1px solid rgba(99,102,241,0.4)',
+          borderRadius: 10,
+          padding: '0.4rem 0.65rem',
+          margin: cameraEnlarged ? '0.35rem 0.5rem 0' : '0.25rem 0.65rem',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          flexWrap: 'wrap' as const,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.68rem', color: recapturePaused ? '#fbbf24' : 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              {recapturePaused ? '⏸ Paused' : 'Auto-capture in'}
+            </span>
+            <span className="ctc-recapture-count" style={{
+              fontSize: '1.25rem',
+              fontWeight: 900,
+              color: recapturePaused ? '#fbbf24' : '#818cf8',
+              lineHeight: 1,
+              minWidth: 24,
+              textAlign: 'center',
+            }}>
+              {recaptureCountdown}
+            </span>
+            <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)' }}>s</span>
+            {recaptureSessionActive && !recapturePaused && (
+              <span style={{ fontSize: '0.62rem', background: 'rgba(34,197,94,0.15)', color: '#4ade80', borderRadius: 4, padding: '1px 5px' }}>
+                Running
+              </span>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            {recapturePaused ? (
+              <button onClick={handleResumeRecapture} style={{
+                background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
+                color: '#4ade80', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+              }}>▶ Resume</button>
+            ) : (
+              <button onClick={handlePauseRecapture} style={{
+                background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)',
+                color: '#fbbf24', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+              }}>⏸ Pause</button>
+            )}
+            <button onClick={handleStopRecaptureSession} style={{
+              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
+              color: '#f87171', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+            }}>■ Stop</button>
+          </div>
+        </div>
+      )}
+
       {/* Controls */}
       <div className="ctc-controls" style={s.controls}>
         {!capturing ? (
@@ -1369,61 +1426,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           ⚡ Instant{instantMode ? ' ✓' : ''}
         </button>
       </div>
-
-      {/* Auto Re-capture Countdown Banner — unified (running or paused) */}
-      {(recaptureCountdown > 0 || recapturePaused) && autoRecapture && (
-        <div className="ctc-recapture-banner" style={{
-          background: recapturePaused ? 'rgba(251,191,36,0.12)' : 'rgba(99,102,241,0.15)',
-          border: recapturePaused ? '1px solid rgba(251,191,36,0.4)' : '1px solid rgba(99,102,241,0.4)',
-          borderRadius: 10,
-          padding: '0.4rem 0.65rem',
-          margin: cameraEnlarged ? '0 0.5rem 0.5rem' : '0.25rem 0.65rem',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-          flexWrap: 'wrap' as const,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: '0.68rem', color: recapturePaused ? '#fbbf24' : 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-              {recapturePaused ? '⏸ Paused' : 'Auto-capture in'}
-            </span>
-            <span className="ctc-recapture-count" style={{
-              fontSize: '1.25rem',
-              fontWeight: 900,
-              color: recapturePaused ? '#fbbf24' : '#818cf8',
-              lineHeight: 1,
-              minWidth: 24,
-              textAlign: 'center',
-            }}>
-              {recaptureCountdown}
-            </span>
-            <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.4)' }}>s</span>
-            {recaptureSessionActive && !recapturePaused && (
-              <span style={{ fontSize: '0.62rem', background: 'rgba(34,197,94,0.15)', color: '#4ade80', borderRadius: 4, padding: '1px 5px' }}>
-                Running
-              </span>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {recapturePaused ? (
-              <button onClick={handleResumeRecapture} style={{
-                background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
-                color: '#4ade80', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-              }}>▶ Resume</button>
-            ) : (
-              <button onClick={handlePauseRecapture} style={{
-                background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)',
-                color: '#fbbf24', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-              }}>⏸ Pause</button>
-            )}
-            <button onClick={handleStopRecaptureSession} style={{
-              background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
-              color: '#f87171', borderRadius: 6, padding: '0.25rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
-            }}>■ Stop</button>
-          </div>
-        </div>
-      )}
+      </div>{/* end ctc-focus-dock */}
       </div>{/* end ctc-scan-zone */}
 
       {/* Instant Answer panel — hidden in focus mode */}
