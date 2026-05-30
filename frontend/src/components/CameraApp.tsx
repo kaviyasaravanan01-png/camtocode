@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { io, Socket } from 'socket.io-client'
 import { createClient } from '@/lib/supabase'
-import UsageBadge, { type PlanUsage } from './UsageBadge'
-import PayButton from './PayButton'
+import UsageAccordion from './UsageAccordion'
+import AIModelSelector, { type AiModelOption } from './AIModelSelector'
+import { type PlanUsage } from './UsageBadge'
 import InstallAppButton from './InstallAppButton'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
@@ -111,6 +112,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [autoCapture,  setAutoCapture]  = useState(false)
   const [autoClear,    setAutoClear]    = useState(false)
   const [llmModel,     setLlmModel]     = useState('haiku')
+  const [aiModels,     setAiModels]     = useState<AiModelOption[]>([])
+  const [geminiAvailable, setGeminiAvailable] = useState(false)
+  const [modelTip,     setModelTip]     = useState('Recommended — best balance of speed, accuracy & cost')
+  const [modelLabel,   setModelLabel]   = useState('Claude Haiku')
+  const [fallbackNotice, setFallbackNotice] = useState('')
   const [bulkCapture,  setBulkCapture]  = useState(false)
   const [bulkBlocks,   setBulkBlocks]   = useState(0)
   const [bulkSession,  setBulkSession]  = useState(0)
@@ -477,8 +483,15 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       sock.on('init_state', (d: any) => {
         setAiEnabled(d.ai_enabled); setNightMode(d.night_mode)
         setAutoCapture(d.auto_capture); setAutoClear(d.auto_clear_after_export)
-        setLlmModel(d.llm_model); setBulkCapture(d.bulk_capture)
+        setLlmModel(d.llm_model || 'haiku'); setBulkCapture(d.bulk_capture)
         setBulkBlocks(d.bulk_session_blocks); setBulkSession(d.bulk_session_number)
+        if (Array.isArray(d.ai_models)) setAiModels(d.ai_models)
+        if (d.gemini_available !== undefined) setGeminiAvailable(d.gemini_available)
+        const initModel = (d.ai_models as AiModelOption[] | undefined)?.find(m => m.key === (d.llm_model || 'haiku'))
+        if (initModel) {
+          setModelTip(initModel.tip)
+          setModelLabel(initModel.label)
+        }
         if (d.auto_recapture_enabled !== undefined) setAutoRecapture(d.auto_recapture_enabled)
         if (d.auto_recapture_interval !== undefined) setRecaptureInterval(d.auto_recapture_interval)
         if (d.auto_recapture_separator !== undefined) {
@@ -643,6 +656,24 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('language_set', (d: { language: string }) => setLanguage(d.language === 'auto' ? '' : d.language))
+
+      sock.on('model_set', (d: { model: string; label: string; tip: string; recommended?: boolean }) => {
+        setLlmModel(d.model)
+        setModelLabel(d.label)
+        setModelTip(d.tip || '')
+        setStatusMsg(`AI model: ${d.label}`)
+        addLog('model: ' + d.label)
+      })
+      sock.on('model_error', (d: { msg: string }) => {
+        setStatusMsg(d.msg)
+        addLog('model error: ' + d.msg)
+      })
+      sock.on('model_fallback', (d: { msg: string; from_model?: string; to_model?: string; to_label?: string }) => {
+        setFallbackNotice(d.msg)
+        setStatusMsg(d.msg)
+        addLog('model fallback: ' + d.msg)
+        setTimeout(() => setFallbackNotice(''), 12_000)
+      })
     }
     init()
     return () => {
@@ -758,6 +789,41 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const handleBulkToggle      = () => { const n = !bulkCapture; setBulkCapture(n); emit('set_bulk', { enabled: n }) }
   const handleResetBulk       = () => { emit('reset_bulk_session'); setBulkBlocks(0) }
 
+  const scanMode: 'code' | 'sa' | 'instant' = instantMode ? 'instant' : saMode ? 'sa' : 'code'
+  const scanModeInfo = {
+    code: {
+      icon: '📄',
+      title: 'Code Scan',
+      color: '#818cf8',
+      bg: 'rgba(99,102,241,0.12)',
+      border: 'rgba(99,102,241,0.35)',
+      desc: 'Capture code from your screen or camera — press ▶ Start or 📷 Photo',
+    },
+    sa: {
+      icon: '🧠',
+      title: 'Scan & Answer',
+      color: '#34d399',
+      bg: 'rgba(16,185,129,0.1)',
+      border: 'rgba(16,185,129,0.35)',
+      desc: 'Scan multiple sections from large files, then tap Stop & Answer for a full AI response',
+    },
+    instant: {
+      icon: '⚡',
+      title: 'Instant Answer',
+      color: '#fde047',
+      bg: 'rgba(234,179,8,0.1)',
+      border: 'rgba(234,179,8,0.35)',
+      desc: 'Point at a question or MCQ, then capture once for an instant answer',
+    },
+  }[scanMode]
+  const defaultAiModels: AiModelOption[] = [
+    { key: 'haiku', label: 'Claude Haiku', tip: 'Recommended — best balance of speed, accuracy & cost', recommended: true, provider: 'anthropic' },
+    { key: 'sonnet', label: 'Claude Sonnet', tip: 'Highest accuracy for large or complex files (Pro plan)', recommended: false, provider: 'anthropic' },
+    { key: 'gemini_lite', label: 'Gemini 2.5 Flash Lite', tip: 'Fastest & cheapest — great for simple scans and MCQs', recommended: false, provider: 'google' },
+    { key: 'gemini_flash', label: 'Gemini 2.5 Flash', tip: 'Balanced Gemini model — good accuracy at low cost', recommended: false, provider: 'google' },
+  ]
+  const isGeminiKey = (k: string) => k === 'gemini' || k === 'gemini_lite' || k === 'gemini_flash'
+
   const handleAutoRecaptureToggle = () => {
     const n = !autoRecapture
     setAutoRecapture(n)
@@ -852,7 +918,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const videoFit    = (showRoi || fitScreen) ? 'contain' : 'cover'
 
   return (
-    <div style={s.root}>
+    <div className="ctc-app" style={s.root}>
       {/* Header */}
       <div style={s.header}>
         <span style={s.logo}>CamToCode</span>
@@ -883,30 +949,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
       </div>
 
-      {/* Plan usage badge */}
-      {planUsage && (
-        <div style={{ padding: '0.5rem 1rem', display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <UsageBadge usage={planUsage} compact />
-          {limitMsg && (
-            <div style={{
-              background: 'rgba(248,113,113,0.15)', border: '1px solid #f87171',
-              borderRadius: 8, padding: '0.45rem 0.9rem', fontSize: '0.78rem', color: '#fca5a5',
-              maxWidth: 420, alignSelf: 'center',
-            }}>
-              ⚠️ {limitMsg}
-            </div>
-          )}
-          {/* Upgrade nudge for free/starter plans hitting limits */}
-          {limitMsg && planUsage?.plan === 'free' && (
-            <PayButton plan="starter" label="Upgrade to Starter — $7/mo"
-              style={{ padding: '0.35rem 0.9rem', fontSize: '0.78rem', borderRadius: 7 }} />
-          )}
-          {limitMsg && planUsage?.plan === 'starter' && (
-            <PayButton plan="pro" label="Upgrade to Pro — $18/mo"
-              style={{ padding: '0.35rem 0.9rem', fontSize: '0.78rem', borderRadius: 7 }} />
-          )}
-        </div>
-      )}
+      {/* Plan usage — collapsible accordion */}
+      <UsageAccordion usage={planUsage} limitMsg={limitMsg || undefined} />
+
+      {/* Legacy inline limit nudge removed — handled inside UsageAccordion */}
 
       {/* Debug log */}
       {showDebug && (
@@ -999,12 +1045,25 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             </div>
           )}
           <div style={s.row}>
-            <span>LLM Model</span>
+            <span>AI Model</span>
             <select value={llmModel} onChange={e => handleModelChange(e.target.value)} style={s.select}>
-              <option value="haiku">Haiku (Fast)</option>
-              <option value="sonnet" disabled style={{ color: 'rgba(255,255,255,0.3)' }}>Sonnet (Coming soon)</option>
+              {(aiModels.length ? aiModels : defaultAiModels).map(m => {
+                const sonnetBlocked = m.key === 'sonnet' && !planUsage?.sonnet_allowed
+                const geminiBlocked = isGeminiKey(m.key) && !geminiAvailable
+                return (
+                  <option key={m.key} value={m.key} disabled={sonnetBlocked || geminiBlocked}>
+                    {m.label}{m.recommended ? ' ★ Recommended' : ''}
+                    {sonnetBlocked ? ' (Pro)' : geminiBlocked ? ' (not configured)' : ''}
+                  </option>
+                )
+              })}
             </select>
           </div>
+          {modelTip && (
+            <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)', paddingLeft: 2 }}>
+              {modelTip}
+            </div>
+          )}
           {bulkCapture && <>
             <div style={s.row}>
               <span>Session {bulkSession} — {bulkBlocks} blocks</span>
@@ -1019,8 +1078,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       )}
 
       {/* Video toolbar */}
-      <div style={s.toolbar}>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+      <div className="ctc-toolbar" style={s.toolbar}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: 1 }}>
           <button onClick={videoMode === 'camera' ? startScreenCapture : startCamera} style={s.toolBtn}>
             {videoMode === 'camera' ? '🖥 Screen' : '📷 Camera'}
           </button>
@@ -1037,7 +1096,17 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             {showRoi ? (roi ? '✂ Region ✓' : '✂ Draw Region') : '✂ Region'}
           </button>
         </div>
-        {videoMode === 'screen' && <span style={s.modeTag}>🖥 Screen</span>}
+        <div className="ctc-toolbar-right" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexShrink: 0 }}>
+          <AIModelSelector
+            models={aiModels.length ? aiModels : defaultAiModels}
+            selected={llmModel}
+            geminiAvailable={geminiAvailable}
+            sonnetAllowed={planUsage?.sonnet_allowed === true || planUsage?.plan === 'admin'}
+            tip={modelTip}
+            onChange={handleModelChange}
+          />
+          {videoMode === 'screen' && <span style={s.modeTag}>🖥 Screen</span>}
+        </div>
       </div>
 
       {/* ROI preset bar — shown when region mode is active */}
@@ -1086,8 +1155,62 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
       )}
 
+      {/* AI fallback notification */}
+      {fallbackNotice && (
+        <div style={{
+          margin: '0 0.75rem',
+          background: 'rgba(251,191,36,0.12)',
+          border: '1px solid rgba(251,191,36,0.4)',
+          borderRadius: 10,
+          padding: '0.5rem 0.85rem',
+          fontSize: '0.78rem',
+          color: '#fde68a',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 8,
+        }}>
+          <span>⚠️</span>
+          <span>{fallbackNotice}</span>
+        </div>
+      )}
+
+      {/* Active scan mode banner — always visible */}
+      <div
+        className="ctc-mode-banner"
+        style={{
+          background: scanModeInfo.bg,
+          border: `1px solid ${scanModeInfo.border}`,
+          borderRadius: 10,
+          padding: '0.55rem 0.85rem',
+          margin: '0 0.75rem',
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 10,
+        }}
+      >
+        <span style={{ fontSize: '1.15rem', flexShrink: 0 }}>{scanModeInfo.icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: scanModeInfo.color }}>
+              {scanModeInfo.title}
+            </span>
+            {scanMode === 'code' && (
+              <span style={{ fontSize: '0.65rem', background: 'rgba(99,102,241,0.2)', color: '#a5b4fc', borderRadius: 4, padding: '1px 6px' }}>
+                Active
+              </span>
+            )}
+            <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)' }}>
+              AI: {modelLabel}
+            </span>
+          </div>
+          <div style={{ fontSize: '0.74rem', color: 'rgba(255,255,255,0.55)', marginTop: 4, lineHeight: 1.45 }}>
+            {scanModeInfo.desc}
+          </div>
+        </div>
+      </div>
+
       {/* Video container */}
-      <div ref={camWrapRef} style={s.camWrap}>
+      <div ref={camWrapRef} className="ctc-cam-wrap" style={s.camWrap}>
         <video ref={videoRef} playsInline muted style={{ ...s.video, objectFit: videoFit as any }} />
         <canvas ref={canvasRef} style={{ display: 'none' }} />
         {/* ROI selection canvas — always mounted, only interactive when showRoi */}
@@ -1121,7 +1244,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       </div>
 
       {/* Controls */}
-      <div style={s.controls}>
+      <div className="ctc-controls" style={s.controls}>
         {!capturing ? (
           <>
             <button onClick={() => {
@@ -1134,43 +1257,49 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               if (!saMode) setFinalText('')
               handleStart()
             }} disabled={socketStatus !== 'connected'}
+              className="ctc-start-btn"
               style={{ ...s.startBtn, opacity: socketStatus !== 'connected' ? 0.5 : 1 }}>
               ▶ Start
             </button>
             <button onClick={handlePhoto} disabled={socketStatus !== 'connected'}
+              className="ctc-ctrl-btn"
               style={{ ...s.photoBtn, opacity: socketStatus !== 'connected' ? 0.5 : 1 }}>
               📷 Photo
             </button>
           </>
         ) : (
-          <button onClick={handleStop} style={s.stopBtn}>⏹ Stop</button>
+          <button onClick={handleStop} className="ctc-stop-btn" style={s.stopBtn}>⏹ Stop</button>
         )}
         {/* Scan & Answer mode toggle */}
         <button
           onClick={handleSaModeToggle}
+          className="ctc-ctrl-btn"
           style={{
             ...s.photoBtn,
             background: saMode ? 'rgba(16,185,129,0.25)' : 'rgba(255,255,255,0.08)',
             borderColor: saMode ? 'rgba(16,185,129,0.6)' : 'rgba(255,255,255,0.15)',
             color: saMode ? '#34d399' : '#e2e8f0',
             fontWeight: saMode ? 700 : 500,
+            boxShadow: saMode ? '0 0 0 1px rgba(16,185,129,0.35)' : undefined,
           }}
-          title="Toggle Scan & Answer mode — scans are accumulated and answered by AI"
+          title="Scan & Answer — accumulate scans, then get one AI answer"
         >
-          🧠 {saMode ? 'S&A On' : 'S&A'}
+          🧠 S&A{saMode ? ' ✓' : ''}
         </button>
         <button
           onClick={handleInstantModeToggle}
+          className="ctc-ctrl-btn"
           style={{
             ...s.photoBtn,
             background: instantMode ? 'rgba(234,179,8,0.22)' : 'rgba(255,255,255,0.08)',
             borderColor: instantMode ? 'rgba(234,179,8,0.55)' : 'rgba(255,255,255,0.15)',
             color: instantMode ? '#fde047' : '#e2e8f0',
             fontWeight: instantMode ? 700 : 500,
+            boxShadow: instantMode ? '0 0 0 1px rgba(234,179,8,0.35)' : undefined,
           }}
-          title="Instant Answer — point camera at a question/MCQ and capture for immediate AI answer"
+          title="Instant Answer — one capture, immediate AI answer"
         >
-          ⚡ {instantMode ? 'Instant On' : 'Instant'}
+          ⚡ Instant{instantMode ? ' ✓' : ''}
         </button>
       </div>
 
@@ -1201,7 +1330,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           )}
           {planUsage && planUsage.scan_answer_day_limit > 0 && (
             <div style={{ marginTop: 6, fontSize: '0.7rem', color: 'rgba(255,255,255,0.35)' }}>
-              Uses S&A quota: {planUsage.scan_answer_today}/{planUsage.scan_answer_day_limit} today · Claude Haiku
+              Uses S&A quota: {planUsage.scan_answer_today}/{planUsage.scan_answer_day_limit} today · {modelLabel}
             </div>
           )}
         </div>
@@ -1299,78 +1428,80 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 
       {/* Auto Re-capture Countdown Banner */}
       {recaptureCountdown > 0 && (
-        <div style={{
+        <div className="ctc-recapture-banner" style={{
           background: 'rgba(99,102,241,0.15)',
           border: '1px solid rgba(99,102,241,0.4)',
           borderRadius: 10,
-          padding: '0.75rem 1rem',
+          padding: '0.45rem 0.75rem',
+          margin: '0 0.75rem',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 12,
+          gap: 10,
           flexWrap: 'wrap' as const,
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Next auto-capture in
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.55)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Auto-capture in
             </span>
-            <span style={{
-              fontSize: '2.2rem',
+            <span className="ctc-recapture-count" style={{
+              fontSize: '1.35rem',
               fontWeight: 900,
               color: '#818cf8',
               lineHeight: 1,
-              minWidth: 40,
+              minWidth: 28,
               textAlign: 'center',
             }}>
               {recaptureCountdown}
             </span>
-            <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)' }}>sec</span>
+            <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)' }}>s</span>
             {recaptureSessionActive && (
-              <span style={{ fontSize: '0.7rem', background: 'rgba(34,197,94,0.15)', color: '#4ade80', borderRadius: 4, padding: '2px 6px' }}>
-                Session Active
+              <span style={{ fontSize: '0.65rem', background: 'rgba(34,197,94,0.15)', color: '#4ade80', borderRadius: 4, padding: '1px 5px' }}>
+                Running
               </span>
             )}
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 6 }}>
             {!recapturePaused ? (
               <button onClick={handlePauseRecapture} style={{
                 background: 'rgba(251,191,36,0.15)', border: '1px solid rgba(251,191,36,0.4)',
-                color: '#fbbf24', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-              }}>⏸ Pause</button>
+                color: '#fbbf24', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+              }}>⏸</button>
             ) : (
               <button onClick={handleResumeRecapture} style={{
                 background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
-                color: '#4ade80', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-              }}>▶ Resume</button>
+                color: '#4ade80', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+              }}>▶</button>
             )}
             <button onClick={handleStopRecaptureSession} style={{
               background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
-              color: '#f87171', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-            }}>■ Stop Session</button>
+              color: '#f87171', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+            }}>■ Stop</button>
           </div>
         </div>
       )}
       {recapturePaused && recaptureCountdown === 0 && (
-        <div style={{
+        <div className="ctc-recapture-banner" style={{
           background: 'rgba(251,191,36,0.1)',
           border: '1px solid rgba(251,191,36,0.3)',
           borderRadius: 10,
-          padding: '0.6rem 1rem',
+          padding: '0.4rem 0.75rem',
+          margin: '0 0.75rem',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 12,
+          gap: 10,
         }}>
-          <span style={{ fontSize: '0.82rem', color: '#fbbf24' }}>⏸ Auto re-capture paused</span>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <span style={{ fontSize: '0.75rem', color: '#fbbf24' }}>⏸ Auto re-capture paused</span>
+          <div style={{ display: 'flex', gap: 6 }}>
             <button onClick={handleResumeRecapture} style={{
               background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.4)',
-              color: '#4ade80', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-            }}>▶ Resume</button>
+              color: '#4ade80', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+            }}>▶</button>
             <button onClick={handleStopRecaptureSession} style={{
               background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.4)',
-              color: '#f87171', borderRadius: 6, padding: '0.3rem 0.75rem', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-            }}>■ Stop Session</button>
+              color: '#f87171', borderRadius: 6, padding: '0.22rem 0.55rem', cursor: 'pointer', fontSize: '0.72rem', fontWeight: 600,
+            }}>■</button>
           </div>
         </div>
       )}
@@ -1385,8 +1516,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       </div>
 
       {/* Output */}
-      <div style={s.outputWrap}>
-        <div style={s.outputHeader}>
+      <div className="ctc-output-wrap" style={s.outputWrap}>
+        <div style={{ ...s.outputHeader, position: 'sticky', top: 0, background: 'rgba(10,10,20,0.95)', zIndex: 2 }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {capturing && liveText
               ? <><span style={{ color: '#22c55e' }}>⬤</span> Live OCR</>
@@ -1414,7 +1545,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             )}
           </div>
         </div>
-        <pre style={s.output}>
+        <pre className="ctc-output-pre" style={s.output}>
           {outputText
             || (processingScan ? statusMsg || 'Processing scan...'
             : capturing ? 'Waiting for frames...'
@@ -1465,8 +1596,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               <div style={{ ...s.row, marginTop: 8 }}>
                 <span style={{ fontSize: '0.85rem' }}>Model</span>
                 <select value={saveModel} onChange={e => setSaveModel(e.target.value)} style={s.select}>
-                  <option value="haiku">Haiku (Fast)</option>
-                  <option value="sonnet">Sonnet (Best)</option>
+                  <option value="haiku">Haiku (Recommended)</option>
+                  <option value="sonnet" disabled={!planUsage?.sonnet_allowed}>Sonnet (Best)</option>
+                  <option value="gemini_lite" disabled={!geminiAvailable}>Gemini 2.5 Flash Lite</option>
+                  <option value="gemini_flash" disabled={!geminiAvailable}>Gemini 2.5 Flash</option>
                 </select>
               </div>
             )}
@@ -1540,8 +1673,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             <div style={s.row}>
               <span>Model</span>
               <select value={exportModel} onChange={e => setExportModel(e.target.value)} style={s.select}>
-                <option value="haiku">Haiku (Fast)</option>
-                <option value="sonnet">Sonnet (Best)</option>
+                <option value="haiku">Haiku (Recommended)</option>
+                <option value="sonnet" disabled={!planUsage?.sonnet_allowed}>Sonnet (Best)</option>
+                <option value="gemini_lite" disabled={!geminiAvailable}>Gemini 2.5 Flash Lite</option>
+                <option value="gemini_flash" disabled={!geminiAvailable}>Gemini 2.5 Flash</option>
               </select>
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: '1rem' }}>
@@ -1579,23 +1714,23 @@ const s: Record<string, React.CSSProperties> = {
   roiBar:       { display: 'flex', alignItems: 'center', gap: 6, padding: '0.3rem 0.75rem', background: 'rgba(99,102,241,0.1)', borderBottom: '1px solid rgba(99,102,241,0.2)', flexWrap: 'wrap' },
   roiPresetBtn: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: '#c7d2fe', borderRadius: 6, padding: '0.15rem 0.55rem', fontSize: '0.72rem', cursor: 'pointer' },
   roiHint:      { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem', pointerEvents: 'none', zIndex: 12 },
-  camWrap:      { position: 'relative', flex: '1 0 auto', maxHeight: '40vh', background: '#000', overflow: 'hidden' },
+  camWrap:      { position: 'relative', flex: '1 0 auto', minHeight: '42vh', background: '#000', overflow: 'hidden' },
   video:        { width: '100%', height: '100%' },
   badge:        { position: 'absolute', top: 8, right: 8, border: '1px solid', borderRadius: 6, padding: '2px 8px', fontSize: '0.68rem', background: 'rgba(0,0,0,0.65)', fontFamily: 'monospace' },
   glare:        { position: 'absolute', bottom: 8, left: 8, background: 'rgba(234,179,8,0.9)', color: '#000', borderRadius: 6, padding: '3px 10px', fontSize: '0.72rem', fontWeight: 700 },
   zoom:         { position: 'absolute', bottom: 8, right: 8, background: 'rgba(0,0,0,0.75)', color: '#fbbf24', borderRadius: 6, padding: '3px 10px', fontSize: '0.72rem' },
   liveDot:      { position: 'absolute', top: 8, left: 8, background: 'rgba(239,68,68,0.85)', color: '#fff', borderRadius: 6, padding: '2px 8px', fontSize: '0.68rem', fontWeight: 700 },
-  controls:     { display: 'flex', gap: 10, padding: '0.6rem 1rem', justifyContent: 'center' },
-  startBtn:     { background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', color: '#fff', padding: '0.7rem 2rem', fontSize: '0.95rem', fontWeight: 700, borderRadius: 50, minWidth: 120, cursor: 'pointer', border: 'none' },
-  stopBtn:      { background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: '#fff', padding: '0.7rem 2rem', fontSize: '0.95rem', fontWeight: 700, borderRadius: 50, minWidth: 120, cursor: 'pointer', border: 'none' },
-  photoBtn:     { background: 'rgba(255,255,255,0.08)', color: '#e2e8f0', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 50, padding: '0.7rem 1.2rem', fontWeight: 600, cursor: 'pointer' },
+  controls:     { display: 'flex', gap: 8, padding: '0.45rem 0.75rem', justifyContent: 'center', flexWrap: 'wrap' },
+  startBtn:     { background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', color: '#fff', padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, borderRadius: 10, minWidth: 96, cursor: 'pointer', border: 'none' },
+  stopBtn:      { background: 'linear-gradient(135deg,#ef4444,#dc2626)', color: '#fff', padding: '0.5rem 1.1rem', fontSize: '0.85rem', fontWeight: 700, borderRadius: 10, minWidth: 96, cursor: 'pointer', border: 'none' },
+  photoBtn:     { background: 'rgba(255,255,255,0.08)', color: '#e2e8f0', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 10, padding: '0.5rem 0.85rem', fontSize: '0.82rem', fontWeight: 600, cursor: 'pointer' },
   statusBar:    { padding: '0.4rem 1rem', fontSize: '0.78rem', color: 'rgba(255,255,255,0.6)', background: 'rgba(0,0,0,0.3)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
   langTag:      { background: 'rgba(99,102,241,0.25)', color: '#818cf8', borderRadius: 4, padding: '1px 6px', fontSize: '0.72rem' },
   syntaxErr:    { color: '#fca5a5', fontSize: '0.72rem' },
   syntaxOk:     { color: '#86efac', fontSize: '0.72rem' },
-  outputWrap:   { margin: '0.6rem 0.75rem', background: 'rgba(0,0,0,0.4)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden' },
+  outputWrap:   { margin: '0.5rem 0.75rem 0.75rem', background: 'rgba(0,0,0,0.4)', borderRadius: 12, border: '1px solid rgba(255,255,255,0.08)', overflow: 'hidden' },
   outputHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.45rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: '0.78rem', color: 'rgba(255,255,255,0.5)' },
-  output:       { padding: '0.6rem 0.75rem', fontSize: '0.78rem', fontFamily: '"JetBrains Mono","Fira Code",Consolas,monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 260, overflowY: 'auto', color: '#e2e8f0', margin: 0 },
+  output:       { padding: '0.6rem 0.75rem', fontSize: '0.78rem', fontFamily: '"JetBrains Mono","Fira Code",Consolas,monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 'min(38vh, 320px)', overflowY: 'auto', color: '#e2e8f0', margin: 0 },
   smallBtn:     { background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)', color: '#e2e8f0', borderRadius: 7, padding: '0.2rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' },
   exportBtn:    { background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', color: '#fff', borderRadius: 8, padding: '0.35rem 0.85rem', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer', border: 'none' },
   cancelBtn:    { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', borderRadius: 8, padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: 'pointer' },

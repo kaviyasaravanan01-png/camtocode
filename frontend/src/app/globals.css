@@ -63,3 +63,77 @@ a:hover {
 code, pre {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
 }
+
+/* ── CamToCode /app mobile layout ── */
+.ctc-app .ctc-cam-wrap {
+  min-height: 42vh;
+  max-height: none;
+}
+
+.ctc-app .ctc-controls {
+  gap: 8px;
+  padding: 0.45rem 0.75rem;
+}
+
+.ctc-app .ctc-ctrl-btn {
+  padding: 0.45rem 0.85rem !important;
+  font-size: 0.82rem !important;
+  min-width: 0 !important;
+  border-radius: 10px !important;
+}
+
+.ctc-app .ctc-start-btn,
+.ctc-app .ctc-stop-btn {
+  padding: 0.45rem 1rem !important;
+  font-size: 0.82rem !important;
+  min-width: 88px !important;
+  border-radius: 10px !important;
+}
+
+.ctc-app .ctc-recapture-banner {
+  padding: 0.45rem 0.75rem !important;
+  margin: 0 0.75rem;
+}
+
+.ctc-app .ctc-recapture-count {
+  font-size: 1.35rem !important;
+  min-width: 28px !important;
+}
+
+.ctc-app .ctc-output-wrap {
+  margin-top: 0.35rem;
+}
+
+.ctc-app .ctc-output-pre {
+  max-height: min(38vh, 320px);
+}
+
+@media (max-width: 640px) {
+  .ctc-app .ctc-cam-wrap {
+    min-height: min(58vh, 520px);
+    flex: 1 0 auto;
+  }
+
+  .ctc-app .ctc-toolbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .ctc-app .ctc-toolbar-right {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .ctc-model-select {
+    max-width: 100% !important;
+    flex: 1 1 100% !important;
+  }
+
+  .ctc-app .ctc-mode-banner {
+    margin: 0 0.75rem;
+  }
+
+  .ctc-app .ctc-output-pre {
+    max-height: min(45vh, 400px);
+  }
+}

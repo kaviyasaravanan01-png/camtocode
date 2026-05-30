@@ -71,10 +71,8 @@ ADMIN_EMAILS: set[str] = {
 SCAN_COOLDOWN_SECS   = 3      # minimum seconds between any two scans
 SCAN_RATE_PER_MINUTE = 8      # rolling-window cap
 
-# Vision OCR always uses Haiku (cost control — never Sonnet for image calls)
-VISION_OCR_MODEL = "claude-haiku-4-5-20251001"
-# Scan & Answer + Instant Answer use the same Haiku model (text or vision)
-SA_ANSWER_MODEL = VISION_OCR_MODEL
+# Default AI model key (haiku recommended)
+DEFAULT_AI_MODEL_KEY = "haiku"
 
 PLANS: dict[str, dict] = {
     # ── Free ──────────────────────────────────────────────────────────────
@@ -245,10 +243,259 @@ MIN_FRAMES_CONSENSUS = 3
 _LINE_CONF_THRESH   = 85.0
 
 LLM_MODELS = {
-    "haiku":  "claude-haiku-4-5-20251001",
-    "sonnet": "claude-sonnet-4-6",
+    "haiku":         "claude-haiku-4-5-20251001",
+    "sonnet":        "claude-sonnet-4-6",
+    "gemini_lite":   "gemini-2.5-flash-lite",
+    "gemini_flash":  "gemini-2.5-flash",
+    "gemini":        "gemini-2.5-flash",  # legacy alias
 }
-VISION_MODEL = VISION_OCR_MODEL   # Always Haiku for Vision (cost control)
+
+# Unified AI model registry (scans, S&A, Instant Answer, AI Fix)
+AI_MODELS: dict[str, dict] = {
+    "haiku": {
+        "provider": "anthropic",
+        "model_id": "claude-haiku-4-5-20251001",
+        "label": "Claude Haiku",
+        "tip": "Recommended — best balance of speed, accuracy & cost",
+        "recommended": True,
+    },
+    "sonnet": {
+        "provider": "anthropic",
+        "model_id": "claude-sonnet-4-6",
+        "label": "Claude Sonnet",
+        "tip": "Highest accuracy for large or complex files (Pro plan)",
+        "recommended": False,
+    },
+    "gemini_lite": {
+        "provider": "google",
+        "model_id": "gemini-2.5-flash-lite",
+        "label": "Gemini 2.5 Flash Lite",
+        "tip": "Fastest & cheapest — great for simple scans and MCQs",
+        "recommended": False,
+    },
+    "gemini_flash": {
+        "provider": "google",
+        "model_id": "gemini-2.5-flash",
+        "label": "Gemini 2.5 Flash",
+        "tip": "Balanced Gemini model — good accuracy at low cost",
+        "recommended": False,
+    },
+}
+
+# Legacy key from earlier builds → gemini_flash
+_MODEL_ALIASES: dict[str, str] = {"gemini": "gemini_flash"}
+
+def _normalize_model_key(key: str) -> str:
+    k = (key or "haiku").strip().lower()
+    return _MODEL_ALIASES.get(k, k)
+
+def _is_google_model_key(key: str) -> bool:
+    cfg = AI_MODELS.get(_normalize_model_key(key))
+    return bool(cfg and cfg.get("provider") == "google")
+
+def _anthropic_ready() -> bool:
+    return HAS_ANTHROPIC and bool(os.environ.get("ANTHROPIC_API_KEY", ""))
+
+def _notify_model_fallback(sid: str | None, from_key: str, reason: str):
+    """Tell the client we switched from Gemini (or other) to Haiku."""
+    from_cfg = AI_MODELS.get(_normalize_model_key(from_key), {})
+    from_label = from_cfg.get("label", from_key)
+    short_reason = reason.strip()[:120] or "request failed"
+    msg = f"{from_label} failed ({short_reason}) — switched to Claude Haiku"
+    print(f"[model_fallback] {msg}", flush=True)
+    if sid:
+        _emit_to(sid, "model_fallback", {
+            "from_model": from_key,
+            "to_model":   "haiku",
+            "to_label":   AI_MODELS["haiku"]["label"],
+            "msg":        msg,
+        })
+        _emit_to(sid, "status", {"msg": msg})
+
+VISION_OCR_MODEL = LLM_MODELS["haiku"]
+SA_ANSWER_MODEL = LLM_MODELS["haiku"]
+VISION_MODEL = VISION_OCR_MODEL   # legacy alias
+
+def _google_api_key() -> str:
+    return os.environ.get("GOOGLE_API_KEY", "") or os.environ.get("GEMINI_API_KEY", "")
+
+def _has_gemini() -> bool:
+    return bool(_google_api_key())
+
+def resolve_ai_model(sess: "UserSession | None", model_key: str | None = None) -> tuple[dict | None, str, str]:
+    """Return (config, resolved_key, error_msg). error_msg empty when OK."""
+    key = _normalize_model_key(model_key or (sess.llm_model_key if sess else "haiku") or "haiku")
+    if key not in AI_MODELS:
+        key = "haiku"
+    if sess and key == "sonnet" and not _is_admin(sess) and not sess.plan_limits.get("sonnet_allowed"):
+        return None, key, "Claude Sonnet requires a Pro plan. Using Haiku instead."
+    cfg = AI_MODELS[key]
+    if cfg["provider"] == "anthropic":
+        if not _anthropic_ready():
+            return None, key, "Anthropic API not configured on server."
+    elif cfg["provider"] == "google":
+        if not _has_gemini():
+            return None, key, "Gemini API not configured — add GOOGLE_API_KEY on the server."
+        if not _anthropic_ready():
+            return None, key, "Gemini selected but Anthropic (Haiku fallback) is not configured."
+    return cfg, key, ""
+
+def _session_ai_ready(sess: "UserSession") -> bool:
+    if not sess.ai_enabled:
+        return False
+    _, _, err = resolve_ai_model(sess)
+    return not err
+
+def _gemini_generate(model_id: str, parts: list, max_output_tokens: int = 8192) -> str:
+    """Single Gemini generateContent call — returns text. Raises on API/empty failure."""
+    api_key = _google_api_key()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent"
+    resp = httpx.post(
+        url,
+        params={"key": api_key},
+        json={
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"maxOutputTokens": max_output_tokens},
+        },
+        timeout=120.0,
+    )
+    if resp.status_code >= 400:
+        detail = resp.text[:300]
+        raise RuntimeError(f"Gemini HTTP {resp.status_code}: {detail}")
+    data = resp.json()
+    if data.get("error"):
+        raise RuntimeError(str(data["error"])[:300])
+    candidates = data.get("candidates") or []
+    if not candidates:
+        raise RuntimeError("Gemini returned no candidates")
+    content = candidates[0].get("content") or {}
+    texts = [p.get("text", "") for p in content.get("parts", []) if p.get("text")]
+    result = "".join(texts).strip()
+    if not result:
+        raise RuntimeError("Gemini returned empty text")
+    return result
+
+def _gemini_stream(model_id: str, parts: list, max_output_tokens: int = 4096):
+    """Yield text chunks from Gemini streamGenerateContent. Raises on HTTP failure."""
+    api_key = _google_api_key()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_id}:streamGenerateContent"
+    with httpx.stream(
+        "POST",
+        url,
+        params={"key": api_key, "alt": "sse"},
+        json={
+            "contents": [{"role": "user", "parts": parts}],
+            "generationConfig": {"maxOutputTokens": max_output_tokens},
+        },
+        timeout=120.0,
+    ) as resp:
+        if resp.status_code >= 400:
+            body = resp.read().decode("utf-8", errors="replace")[:300]
+            raise RuntimeError(f"Gemini stream HTTP {resp.status_code}: {body}")
+        got_text = False
+        for line in resp.iter_lines():
+            if not line or not line.startswith("data: "):
+                continue
+            payload = line[6:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                import json as _json
+                chunk = _json.loads(payload)
+                if chunk.get("error"):
+                    raise RuntimeError(str(chunk["error"])[:300])
+                for cand in chunk.get("candidates") or []:
+                    for part in (cand.get("content") or {}).get("parts") or []:
+                        t = part.get("text", "")
+                        if t:
+                            got_text = True
+                            yield t
+            except RuntimeError:
+                raise
+            except Exception:
+                continue
+        if not got_text:
+            raise RuntimeError("Gemini stream returned no text")
+
+def _anthropic_generate_text(model_id: str, prompt: str, max_tokens: int = 4096) -> str:
+    client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
+    resp = client.messages.create(
+        model=model_id, max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return resp.content[0].text.strip()
+
+def _anthropic_stream_text(model_id: str, prompt: str, on_token, max_tokens: int = 4000) -> str:
+    client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
+    answer = ""
+    with client.messages.stream(
+        model=model_id, max_tokens=max_tokens,
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        for chunk in stream.text_stream:
+            answer += chunk
+            on_token(chunk)
+    return answer
+
+def _anthropic_stream_vision(model_id: str, b64_data: str, media_type: str, prompt: str,
+                              on_token, max_tokens: int = 4000) -> str:
+    client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
+    answer = ""
+    with client.messages.stream(
+        model=model_id, max_tokens=max_tokens,
+        messages=[{"role": "user", "content": [
+            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_data}},
+            {"type": "text", "text": prompt},
+        ]}],
+    ) as stream:
+        for chunk in stream.text_stream:
+            answer += chunk
+            on_token(chunk)
+    return answer
+
+def _ai_stream_answer(prompt: str, sess: "UserSession", on_token, max_tokens: int = 4000,
+                      sid: str | None = None) -> str:
+    """Stream an answer using the session's selected AI model; Gemini → Haiku fallback."""
+    cfg, key, err = resolve_ai_model(sess)
+    if err or not cfg:
+        raise RuntimeError(err or "AI model unavailable")
+    if cfg["provider"] == "google":
+        try:
+            answer = ""
+            for chunk in _gemini_stream(cfg["model_id"], [{"text": prompt}], max_tokens):
+                answer += chunk
+                on_token(chunk)
+            return answer
+        except Exception as e:
+            if not _anthropic_ready():
+                raise
+            _notify_model_fallback(sid, key, str(e))
+            return _anthropic_stream_text(AI_MODELS["haiku"]["model_id"], prompt, on_token, max_tokens)
+    return _anthropic_stream_text(cfg["model_id"], prompt, on_token, max_tokens)
+
+def _ai_stream_answer_vision(b64_data: str, media_type: str, prompt: str, sess: "UserSession",
+                              on_token, max_tokens: int = 4000, sid: str | None = None) -> str:
+    cfg, key, err = resolve_ai_model(sess)
+    if err or not cfg:
+        raise RuntimeError(err or "AI model unavailable")
+    if cfg["provider"] == "google":
+        parts = [
+            {"inline_data": {"mime_type": media_type, "data": b64_data}},
+            {"text": prompt},
+        ]
+        try:
+            answer = ""
+            for chunk in _gemini_stream(cfg["model_id"], parts, max_tokens):
+                answer += chunk
+                on_token(chunk)
+            return answer
+        except Exception as e:
+            if not _anthropic_ready():
+                raise
+            _notify_model_fallback(sid, key, str(e))
+            return _anthropic_stream_vision(
+                AI_MODELS["haiku"]["model_id"], b64_data, media_type, prompt, on_token, max_tokens)
+    return _anthropic_stream_vision(cfg["model_id"], b64_data, media_type, prompt, on_token, max_tokens)
 
 _EXT_MAP: dict[str, str] = {
     "python":     ".py",   "javascript": ".js",   "typescript": ".ts",
@@ -335,7 +582,8 @@ class UserSession:
         self.instant_answer_mode       = False   # one-shot vision Q&A per capture
 
     def active_model(self) -> str:
-        return LLM_MODELS.get(self.llm_model_key, LLM_MODELS["haiku"])
+        cfg, _, _ = resolve_ai_model(self)
+        return cfg["model_id"] if cfg else LLM_MODELS["haiku"]
 
 _sessions: dict[str, UserSession] = {}
 _sessions_lock = threading.Lock()
@@ -1458,9 +1706,10 @@ def reconstruct_indentation(text: str, img_np: np.ndarray) -> str:
 def llm_correct_code(text: str, language: str, line_confs: list[float] | None = None,
                      session: UserSession | None = None) -> str:
     api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not (HAS_ANTHROPIC and api_key):
+    cfg, _, err = resolve_ai_model(session)
+    if err or not cfg:
         return text
-    active_model = session.active_model() if session else LLM_MODELS["haiku"]
+    active_model = cfg["model_id"]
     text = text.replace("\t", "    ")
     lines = text.splitlines()
     if not lines:
@@ -1513,6 +1762,14 @@ def llm_correct_code(text: str, language: str, line_confs: list[float] | None = 
         )
 
     try:
+        if cfg["provider"] == "google":
+            try:
+                return _gemini_generate(cfg["model_id"], [{"text": _prompt(text)}], max_output_tokens=4096)
+            except Exception as e:
+                if not _anthropic_ready():
+                    return text
+                print(f"[llm_correct] Gemini failed, Haiku fallback: {e}", flush=True)
+                active_model = AI_MODELS["haiku"]["model_id"]
         client = _make_anthropic_client(api_key)
         if line_confs is not None and len(line_confs) > 0:
             if abs(len(lines) - len(line_confs)) <= max(3, len(lines) // 5):
@@ -1640,37 +1897,33 @@ def llm_repair_syntax_generic(text: str, error_msg: str, language: str,
 def llm_fix_full_file(content: str, lang: str, model_key: str | None = None,
                       session: UserSession | None = None,
                       token_tracker: dict | None = None) -> str:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not (HAS_ANTHROPIC and api_key):
+    cfg, key, err = resolve_ai_model(session, model_key)
+    if err or not cfg:
         return content
-    if session and model_key:
-        _model = LLM_MODELS.get(model_key, session.active_model())
-    elif session:
-        _model = session.active_model()
-    else:
-        _model = LLM_MODELS.get(model_key or "haiku", LLM_MODELS["haiku"])
-
+    prompt = (
+        f"You are correcting a complete {lang.upper()} source file assembled from multiple OCR captures.\n\n"
+        "Fix ALL OCR misreads: l<->1, 0<->O, rn->m, |->l, `<->', ;->:.\n"
+        "Fix missing/extra punctuation, broken indentation.\n"
+        "Do NOT add, remove, or reorder logical blocks.\n"
+        "Do NOT add comments, docstrings, or imports not in the original.\n"
+        "Do NOT change variable/function/class names or logic.\n"
+        "Output ONLY the corrected code — no markdown fences, no explanation.\n\n"
+        f"SOURCE FILE:\n{content}"
+    )
     try:
-        client = _make_anthropic_client(api_key)
-        prompt = (
-            f"You are correcting a complete {lang.upper()} source file assembled from multiple OCR captures.\n\n"
-            "Fix ALL OCR misreads: l<->1, 0<->O, rn->m, |->l, `<->', ;->:.\n"
-            "Fix missing/extra punctuation, broken indentation.\n"
-            "Do NOT add, remove, or reorder logical blocks.\n"
-            "Do NOT add comments, docstrings, or imports not in the original.\n"
-            "Do NOT change variable/function/class names or logic.\n"
-            "Output ONLY the corrected code — no markdown fences, no explanation.\n\n"
-            f"SOURCE FILE:\n{content}"
-        )
-        resp = client.messages.create(
-            model=_model, max_tokens=8192,
-            messages=[{"role": "user", "content": prompt}],
-        )
+        if cfg["provider"] == "google":
+            try:
+                result = _gemini_generate(cfg["model_id"], [{"text": prompt}], max_output_tokens=8192)
+            except Exception as e:
+                if not _anthropic_ready():
+                    return content
+                print(f"[llm_fix_full_file] Gemini failed, Haiku fallback: {e}", flush=True)
+                cfg = AI_MODELS["haiku"]
+                result = _anthropic_generate_text(cfg["model_id"], prompt, max_tokens=8192)
+        else:
+            result = _anthropic_generate_text(cfg["model_id"], prompt, max_tokens=8192)
         if token_tracker is not None:
-            token_tracker["input"]  = getattr(resp.usage, "input_tokens",  0)
-            token_tracker["output"] = getattr(resp.usage, "output_tokens", 0)
-            token_tracker["model"]  = _model
-        result = resp.content[0].text.strip()
+            token_tracker["model"] = cfg["model_id"]
         if result.startswith("```"):
             result = "\n".join(
                 ln for ln in result.splitlines()
@@ -1697,12 +1950,14 @@ def _encode_for_vision(img_np: np.ndarray, max_side: int = 2048) -> tuple[str, s
 
 def _vision_ocr(b64_data: str, media_type: str = "image/png",
                 language_hint: str = "",
-                token_tracker: dict | None = None) -> str | None:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not (HAS_ANTHROPIC and api_key):
+                token_tracker: dict | None = None,
+                session: UserSession | None = None,
+                sid: str | None = None) -> str | None:
+    cfg, key, err = resolve_ai_model(session)
+    if err or not cfg:
+        print(f"[Vision OCR] skipped: {err}", flush=True)
         return None
     try:
-        client = _make_anthropic_client(api_key)
         if language_hint:
             lang_preamble = f"LANGUAGE: {language_hint.upper()}\n\n"
         else:
@@ -1721,18 +1976,38 @@ def _vision_ocr(b64_data: str, media_type: str = "image/png",
             "6. DO NOT add comments or docstrings not visible in the image\n"
             "7. Fix obvious OCR confusions: l/1/I context, 0/O context, rn->m, backtick vs quote\n"
         )
-        resp = client.messages.create(
-            model=VISION_MODEL, max_tokens=8192,
-            messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_data}},
-                {"type": "text", "text": prompt},
-            ]}],
-        )
-        if token_tracker is not None:
-            token_tracker["input"]  = getattr(resp.usage, "input_tokens",  0)
-            token_tracker["output"] = getattr(resp.usage, "output_tokens", 0)
-            token_tracker["model"]  = VISION_MODEL
-        result = resp.content[0].text.strip()
+
+        def _run_anthropic_vision(model_id: str) -> str:
+            client = _make_anthropic_client(os.environ.get("ANTHROPIC_API_KEY", ""))
+            resp = client.messages.create(
+                model=model_id, max_tokens=8192,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64_data}},
+                    {"type": "text", "text": prompt},
+                ]}],
+            )
+            if token_tracker is not None:
+                token_tracker["input"]  = getattr(resp.usage, "input_tokens",  0)
+                token_tracker["output"] = getattr(resp.usage, "output_tokens", 0)
+                token_tracker["model"]  = model_id
+            return resp.content[0].text.strip()
+
+        result = ""
+        if cfg["provider"] == "google":
+            try:
+                parts = [
+                    {"inline_data": {"mime_type": media_type, "data": b64_data}},
+                    {"text": prompt},
+                ]
+                result = _gemini_generate(cfg["model_id"], parts, max_output_tokens=8192)
+            except Exception as e:
+                if not _anthropic_ready():
+                    raise
+                _notify_model_fallback(sid, key, str(e))
+                result = _run_anthropic_vision(AI_MODELS["haiku"]["model_id"])
+        else:
+            result = _run_anthropic_vision(cfg["model_id"])
+
         if result.startswith("```"):
             result = "\n".join(l for l in result.splitlines()
                                if not l.strip().startswith("```")).strip()
@@ -1815,6 +2090,17 @@ def on_connect():
         "instant_answer_mode":     sess.instant_answer_mode,
         "user_id":                 sess.user_id,
         "user_email":              sess.user_email,
+        "ai_models": [
+            {
+                "key": k,
+                "label": v["label"],
+                "tip": v.get("tip", ""),
+                "recommended": v.get("recommended", False),
+                "provider": v["provider"],
+            }
+            for k, v in AI_MODELS.items()
+        ],
+        "gemini_available": _has_gemini(),
         "plan_usage":              plan_usage_payload(sess),
     })
 
@@ -1890,7 +2176,7 @@ def on_stop():
         return
 
     # ── Subscription rate + scan limit checks ────────────────────────────
-    is_ai_scan = sess.ai_enabled and bool(os.environ.get("ANTHROPIC_API_KEY"))
+    is_ai_scan = _session_ai_ready(sess)
     rate_ok, rate_msg = check_rate_limits(sess)
     if not rate_ok:
         emit("status", {"capturing": False, "processing": False, "msg": rate_msg})
@@ -1941,13 +2227,13 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
         api_key  = os.environ.get("ANTHROPIC_API_KEY", "")
 
         # Primary: Claude Vision (ALWAYS Haiku — enforced by VISION_OCR_MODEL)
-        if sess.ai_enabled and HAS_ANTHROPIC and api_key:
+        if _session_ai_ready(sess):
             _emit_to(sid, "status", {"capturing": False, "processing": True,
-                                     "msg": "Reading code with Claude Vision (Haiku)..."})
+                                     "msg": f"Reading code with AI ({sess.llm_model_key})..."})
             try:
                 best_img        = _best_frame(rgb_buf)
                 b64, media_type = _encode_for_vision(best_img)
-                vision_text     = _vision_ocr(b64, media_type, sess.language_hint)
+                vision_text     = _vision_ocr(b64, media_type, sess.language_hint, session=sess, sid=sid)
                 if vision_text:
                     text    = vision_text
                     ai_used = True
@@ -2018,7 +2304,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
         lang = sess.language_hint if sess.language_hint else detect_language(text)
 
         # Syntax-guided repair (Haiku only — no additional plan check needed)
-        if not ai_used and sess.ai_enabled and HAS_ANTHROPIC and api_key and lang == "python":
+        if not ai_used and _session_ai_ready(sess) and lang == "python":
             try:
                 ok, err = check_python_syntax(text)
                 if not ok and err:
@@ -2032,7 +2318,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
                 pass
 
         # Full LLM correction
-        if not ai_used and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+        if not ai_used and _session_ai_ready(sess):
             _emit_to(sid, "status", {"capturing": False, "processing": True, "msg": "AI correcting code..."})
             corrected = llm_correct_code(text, lang, best_line_confs if best_line_confs else None, sess)
             if corrected and corrected != text:
@@ -2045,7 +2331,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
             syntax_ok, syntax_err = check_python_syntax(text)
         elif lang in _JS_LANGS:
             syntax_ok, syntax_err = check_js_syntax(text)
-            if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+            if not syntax_ok and syntax_err and _session_ai_ready(sess):
                 repaired = llm_repair_js_syntax(text, syntax_err, lang, sess)
                 if repaired and repaired != text:
                     text = repaired
@@ -2053,7 +2339,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
                     syntax_ok, syntax_err = check_js_syntax(text)
         elif lang == "go":
             syntax_ok, syntax_err = check_go_syntax(text)
-            if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+            if not syntax_ok and syntax_err and _session_ai_ready(sess):
                 repaired = llm_repair_syntax_generic(text, syntax_err, "go", sess)
                 if repaired and repaired != text:
                     text = repaired
@@ -2061,7 +2347,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
                     syntax_ok, syntax_err = check_go_syntax(text)
         elif lang == "css":
             syntax_ok, syntax_err = check_css_syntax(text)
-            if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+            if not syntax_ok and syntax_err and _session_ai_ready(sess):
                 repaired = llm_repair_syntax_generic(text, syntax_err, "css", sess)
                 if repaired and repaired != text:
                     text = repaired
@@ -2161,8 +2447,11 @@ def on_photo(data):
             emit("status", {"capturing": False, "processing": False, "msg": err})
             return
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key or not HAS_ANTHROPIC:
-            emit("sa_error", {"msg": "AI service unavailable. Please try again later."})
+        if not _session_ai_ready(sess):
+            if _is_google_model_key(sess.llm_model_key):
+                emit("sa_error", {"msg": "Gemini API not configured on server."})
+            else:
+                emit("sa_error", {"msg": "AI service unavailable. Please try again later."})
             emit("status", {"capturing": False, "processing": False, "msg": "AI unavailable"})
             return
         sess._sa_answering = True
@@ -2176,8 +2465,8 @@ def on_photo(data):
         return
 
     # ── Subscription rate + scan limit checks ────────────────────────────
+    is_ai_scan = _session_ai_ready(sess)
     api_key    = os.environ.get("ANTHROPIC_API_KEY", "")
-    is_ai_scan = sess.ai_enabled and HAS_ANTHROPIC and bool(api_key)
     rate_ok, rate_msg = check_rate_limits(sess)
     if not rate_ok:
         emit("status", {"capturing": False, "msg": rate_msg})
@@ -2194,14 +2483,17 @@ def on_photo(data):
     heatmap = []
     conf    = 0.0
 
-    if sess.ai_enabled and HAS_ANTHROPIC and api_key:
-        emit("status", {"capturing": True, "msg": "Reading code with Claude Vision (Haiku)..."})
+    if _session_ai_ready(sess):
+        emit("status", {"capturing": True, "msg": f"Reading code with AI ({sess.llm_model_key})..."})
         try:
             b64_data, media_type = _encode_for_vision(img_np)
-            vision_text = _vision_ocr(b64_data, media_type, sess.language_hint)
+            vision_text = _vision_ocr(b64_data, media_type, sess.language_hint, session=sess, sid=sid)
         except Exception as ve:
             vision_text = None
-            emit("status", {"capturing": True, "msg": f"Vision error: {ve} — falling back..."})
+            if _is_google_model_key(sess.llm_model_key):
+                emit("status", {"capturing": True, "msg": f"Gemini failed — retrying with Haiku..."})
+            else:
+                emit("status", {"capturing": True, "msg": f"Vision error: {ve} — falling back..."})
         if vision_text:
             text    = vision_text
             ai_used = True
@@ -2244,7 +2536,7 @@ def on_photo(data):
             text = reconstruct_indentation(text, img_np)
         except Exception:
             pass
-        if sess.ai_enabled and HAS_ANTHROPIC and api_key and lang == "python":
+        if _session_ai_ready(sess) and lang == "python":
             try:
                 ok, err = check_python_syntax(text)
                 if not ok and err:
@@ -2256,7 +2548,7 @@ def on_photo(data):
                             ai_used = True
             except Exception:
                 pass
-        if sess.ai_enabled and HAS_ANTHROPIC and api_key and not ai_used:
+        if _session_ai_ready(sess) and not ai_used:
             corrected = llm_correct_code(text, lang, lc if lc else None, sess)
             if corrected and corrected != text:
                 text = corrected
@@ -2267,7 +2559,7 @@ def on_photo(data):
         syntax_ok, syntax_err = check_python_syntax(text)
     elif lang in _JS_LANGS:
         syntax_ok, syntax_err = check_js_syntax(text)
-        if not syntax_ok and syntax_err and sess.ai_enabled and HAS_ANTHROPIC and api_key:
+        if not syntax_ok and syntax_err and _session_ai_ready(sess):
             repaired = llm_repair_js_syntax(text, syntax_err, lang, sess)
             if repaired and repaired != text:
                 text = repaired
@@ -2497,10 +2789,26 @@ def on_resume_recapture(data):
 @socketio.on("set_model")
 def on_set_model(data):
     sess = get_session(request.sid)
-    key = data.get("model", "haiku")
-    if key in LLM_MODELS:
-        sess.llm_model_key = key
-    emit("status", {"msg": f"LLM model: {sess.llm_model_key}"})
+    key = _normalize_model_key(str((data or {}).get("model", "haiku")))
+    if key not in AI_MODELS:
+        emit("model_error", {"msg": "Unknown model"})
+        return
+    if key == "sonnet" and not _is_admin(sess) and not sess.plan_limits.get("sonnet_allowed"):
+        emit("model_error", {"msg": "Claude Sonnet requires a Pro plan."})
+        return
+    _, _, err = resolve_ai_model(sess, key)
+    if err:
+        emit("model_error", {"msg": err})
+        return
+    sess.llm_model_key = key
+    tip = AI_MODELS[key].get("tip", "")
+    emit("model_set", {
+        "model": key,
+        "label": AI_MODELS[key]["label"],
+        "tip": tip,
+        "recommended": AI_MODELS[key].get("recommended", False),
+    })
+    emit("status", {"msg": f"AI model: {AI_MODELS[key]['label']}"})
 
 
 @socketio.on("set_bulk")
@@ -2531,9 +2839,9 @@ def on_fix_session_file(data=None):
     _d = data or {}
 
     use_ai    = bool(_d.get("ai_fix", sess.ai_enabled))
-    use_model = str(_d.get("model", sess.llm_model_key)).strip().lower()
-    if use_model not in ("haiku", "sonnet"):
-        use_model = sess.llm_model_key
+    use_model = _normalize_model_key(str(_d.get("model", sess.llm_model_key)))
+    if use_model not in AI_MODELS:
+        use_model = _normalize_model_key(sess.llm_model_key)
 
     if sess.capturing:
         emit("session_fixed", {"error": "Stop the capture before exporting"})
@@ -2564,12 +2872,12 @@ def on_fix_session_file(data=None):
         lang = "text"
 
     corrected = content
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if use_ai and HAS_ANTHROPIC and api_key:
+    if use_ai and _session_ai_ready(sess):
         n_blocks = sess.bulk_session_blocks
+        model_label = AI_MODELS.get(use_model, {}).get("label", use_model)
         emit("status", {
             "capturing": True,
-            "msg": f"Fixing full session ({lang}, {n_blocks} block{'s' if n_blocks != 1 else ''}) with Claude {use_model.capitalize()}...",
+            "msg": f"Fixing full session ({lang}, {n_blocks} block{'s' if n_blocks != 1 else ''}) with {model_label}...",
         })
         try:
             fixed = llm_fix_full_file(content, lang, model_key=use_model, session=sess)
@@ -2577,6 +2885,8 @@ def on_fix_session_file(data=None):
                 corrected = fixed
         except Exception as e:
             emit("status", {"capturing": True, "msg": f"Fix warning: {e} — saving raw OCR"})
+    elif use_ai:
+        emit("status", {"capturing": True, "msg": "AI fix unavailable — exporting raw session..."})
     else:
         emit("status", {"capturing": True, "msg": f"Exporting raw session ({lang})..."})
 
@@ -2872,7 +3182,7 @@ def _run_instant_answer_from_frames(sid: str, rgb_buf: list):
 
 
 def _run_instant_answer_from_image(sid: str, img_np):
-    """Instant Answer from a single image — Claude Vision reads the question directly."""
+    """Instant Answer from a single image using the user's selected AI model."""
     sess = get_session(sid)
     user_id = sess.user_id
     try:
@@ -2880,27 +3190,17 @@ def _run_instant_answer_from_image(sid: str, img_np):
         if not ok:
             _emit_to(sid, "sa_error", {"msg": err})
             return
-
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key or not HAS_ANTHROPIC:
-            _emit_to(sid, "sa_error", {"msg": "AI service unavailable. Please try again later."})
+        _, _, model_err = resolve_ai_model(sess)
+        if model_err:
+            _emit_to(sid, "sa_error", {"msg": model_err})
             return
 
         b64, media_type = _encode_for_vision(img_np)
-        client = _make_anthropic_client(api_key)
-        answer_text = ""
-
-        with client.messages.stream(
-            model=SA_ANSWER_MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": [
-                {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}},
-                {"type": "text", "text": _INSTANT_ANSWER_PROMPT},
-            ]}],
-        ) as stream:
-            for chunk in stream.text_stream:
-                answer_text += chunk
-                _emit_to(sid, "sa_token", {"token": chunk})
+        answer_text = _ai_stream_answer_vision(
+            b64, media_type, _INSTANT_ANSWER_PROMPT, sess,
+            lambda t: _emit_to(sid, "sa_token", {"token": t}),
+            sid=sid,
+        )
 
         if not answer_text.strip():
             _emit_to(sid, "sa_error", {"msg": "Could not read the question. Move closer and try again."})
@@ -3003,9 +3303,9 @@ def on_sa_stop_and_answer():
     if len(lines) > max_lines:
         content = "\n".join(lines[:max_lines])
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key or not HAS_ANTHROPIC:
-        emit("sa_error", {"msg": "AI service unavailable. Please try again later."})
+    _, _, model_err = resolve_ai_model(sess)
+    if model_err:
+        emit("sa_error", {"msg": model_err})
         return
 
     sess._sa_answering = True
@@ -3018,26 +3318,20 @@ def on_sa_stop_and_answer():
 
 
 def _run_sa_answer(sid: str, user_id: str, content: str):
-    """Stream Anthropic answer from accumulated scan text."""
+    """Stream answer from accumulated scan text using the user's selected AI model."""
     sess = get_session(sid)
     try:
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key or not HAS_ANTHROPIC:
-            _emit_to(sid, "sa_error", {"msg": "AI service unavailable. Please try again later."})
+        _, _, model_err = resolve_ai_model(sess)
+        if model_err:
+            _emit_to(sid, "sa_error", {"msg": model_err})
             return
 
-        client = _make_anthropic_client(api_key)
         prompt = _SA_TEXT_ANSWER_PROMPT_HEAD + f"{content}\n\nProvide a clear, comprehensive answer:"
-
-        answer_text = ""
-        with client.messages.stream(
-            model=SA_ANSWER_MODEL,
-            max_tokens=4000,
-            messages=[{"role": "user", "content": prompt}],
-        ) as stream:
-            for chunk in stream.text_stream:
-                answer_text += chunk
-                _emit_to(sid, "sa_token", {"token": chunk})
+        answer_text = _ai_stream_answer(
+            prompt, sess,
+            lambda t: _emit_to(sid, "sa_token", {"token": t}),
+            sid=sid,
+        )
 
         if not answer_text.strip():
             _emit_to(sid, "sa_error", {"msg": "AI returned an empty answer. Please try again."})
