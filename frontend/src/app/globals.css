@@ -319,6 +319,7 @@ code, pre {
 
 /* Camera ~80% of space below header (4fr of 4+1) */
 .ctc-scan-zone--enlarged .ctc-cam-wrap {
+  position: relative;
   grid-row: 2;
   flex: none !important;
   height: 100% !important;
@@ -385,4 +386,101 @@ code, pre {
 
 .ctc-enlarge-btn:active {
   background: rgba(99,102,241,0.4) !important;
+}
+
+/* Focus mode overlays — processing & answers stay inside enlarge */
+.ctc-focus-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgba(0,0,0,0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.ctc-focus-overlay-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: #e2e8f0;
+  max-width: 90%;
+}
+
+.ctc-focus-stream {
+  margin-top: 0.5rem;
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 0.68rem;
+  font-family: monospace;
+  color: rgba(255,255,255,0.55);
+  text-align: left;
+  width: 100%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ctc-focus-answer {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  background: rgba(10,10,20,0.96);
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  overflow: hidden;
+}
+
+.ctc-focus-answer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.35rem 0.5rem;
+  flex-shrink: 0;
+  font-size: 0.82rem;
+}
+
+.ctc-focus-answer-close {
+  background: none !important;
+  border: none !important;
+  color: rgba(255,255,255,0.45) !important;
+  font-size: 1rem !important;
+  padding: 0.2rem 0.45rem !important;
+  cursor: pointer;
+}
+
+.ctc-focus-answer-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  font-size: 0.78rem;
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #e2e8f0;
+  background: rgba(0,0,0,0.4);
+  border-radius: 8px;
+  padding: 0.6rem;
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+.ctc-focus-answer-actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 0.5rem;
+  flex-shrink: 0;
+}
+
+.ctc-focus-answer-btn {
+  background: rgba(255,255,255,0.1) !important;
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  color: #e2e8f0 !important;
+  border-radius: 7px !important;
+  padding: 0.3rem 0.65rem !important;
+  font-size: 0.72rem !important;
+  cursor: pointer;
 }

@@ -162,7 +162,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [recaptureSeparator,    setRecaptureSeparator]    = useState(false)
   const recaptureRemainingRef   = useRef(0)
   const recapturePausedRef      = useRef(false)
-  const recaptureSeparatorRef   = useRef(false)  // readable inside socket closure
+  const recaptureSeparatorRef   = useRef(false)
   const outputWrapRef           = useRef<HTMLDivElement>(null)
   const cameraEnlargedRef         = useRef(false)
   const [cameraEnlarged,         setCameraEnlarged]         = useState(false)
@@ -194,13 +194,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     }, 350)
   }, [])
 
-  const exitFocusAndScroll = useCallback(() => {
-    if (cameraEnlargedRef.current) {
-      setCameraEnlarged(false)
-      cameraEnlargedRef.current = false
-      scrollToOutput()
-    }
-  }, [scrollToOutput])
+  const closeFocusMode = useCallback(() => {
+    setCameraEnlarged(false)
+    cameraEnlargedRef.current = false
+  }, [])
 
   const clearSaAnsweringTimeout = useCallback(() => {
     if (saAnsweringTimeoutRef.current) {
@@ -559,13 +556,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         const ts  = new Date().toISOString().slice(0, 10).replace(/-/g, '')
         setSaveFilename(prev => prev || `${d.lang || 'code'}_${ts}${ext}`)
         setPendingLang(d.lang)
-        if (cameraEnlargedRef.current) {
-          setCameraEnlarged(false)
-          cameraEnlargedRef.current = false
-          setTimeout(() => {
-            outputWrapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-          }, 200)
-        }
+        // Stay in enlarge during auto-recapture — user exits manually via ✕ Close
         // Auto-append to Scan & Answer buffer when in S&A mode
         if (saModeRef.current && !instantModeRef.current && d.text) {
           setSaAppending(true)
@@ -795,8 +786,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     setProcessingScan(true)
     if (instantModeRef.current) beginSaAnswering('Reading question and generating answer...')
     if (socketRef.current?.connected) { addLog('Emitting stop'); socketRef.current.emit('stop') }
-    exitFocusAndScroll()
-  }, [beginSaAnswering, exitFocusAndScroll])
+  }, [beginSaAnswering])
 
   const handleStopRef = useRef(handleStop)
   useEffect(() => { handleStopRef.current = handleStop }, [handleStop])
@@ -908,7 +898,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     setRecaptureCountdown(0)
     setRecapturePaused(false)
     setRecaptureSessionActive(false)
-    exitFocusAndScroll()
+  }
+  const closeFocusModeWithScroll = () => {
+    closeFocusMode()
+    if (scanCount > 0 || finalText || liveText) scrollToOutput()
   }
   const toggleCameraEnlarged = () => {
     setCameraEnlarged(v => {
@@ -1265,7 +1258,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         {cameraEnlarged && (
           <div className="ctc-focus-bar">
             <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'rgba(255,255,255,0.7)' }}>Focus Mode</span>
-            <button type="button" className="ctc-focus-close" onClick={() => { setCameraEnlarged(false); cameraEnlargedRef.current = false }}>
+            <button type="button" className="ctc-focus-close" onClick={closeFocusModeWithScroll}>
               ✕ Close
             </button>
           </div>
@@ -1300,13 +1293,56 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         {glareWarn && <div style={{ ...s.glare, zIndex: 11 }}>⚠ Glare</div>}
         {zoomMsg   && <div style={{ ...s.zoom, zIndex: 11 }}>{zoomMsg}</div>}
         {capturing && <div style={{ ...s.liveDot, zIndex: 11 }}>● LIVE</div>}
-        {processingScan && !capturing && (
+        {processingScan && !capturing && !cameraEnlarged && (
           <div style={{ ...s.liveDot, zIndex: 11, background: 'rgba(99,102,241,0.85)', borderColor: 'rgba(99,102,241,0.5)' }}>
             ⏳ Processing
           </div>
         )}
         {showRoi && !roi && (
           <div style={s.roiHint}>Drag to select region</div>
+        )}
+        {cameraEnlarged && processingScan && !saAnswering && (
+          <div className="ctc-focus-overlay">
+            <div className="ctc-focus-overlay-inner">
+              <span style={{ fontSize: '1.5rem' }}>⏳</span>
+              <span>{statusMsg || 'Processing scan...'}</span>
+              {(recaptureSessionActive || autoRecapture) && (
+                <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.5)' }}>Auto re-capture session active</span>
+              )}
+            </div>
+          </div>
+        )}
+        {cameraEnlarged && saAnswering && (
+          <div className="ctc-focus-overlay">
+            <div className="ctc-focus-overlay-inner">
+              <span style={{ fontSize: '1.5rem' }}>{instantMode ? '⚡' : '🧠'}</span>
+              <span>{saStatusMsg || (instantMode ? 'Generating instant answer...' : 'Generating answer...')}</span>
+              {saStreamText && (
+                <div className="ctc-focus-stream">{saStreamText.slice(-400)}</div>
+              )}
+            </div>
+          </div>
+        )}
+        {cameraEnlarged && showSaAnswer && saAnswerText && (
+          <div className="ctc-focus-answer">
+            <div className="ctc-focus-answer-head">
+              <span style={{ fontWeight: 700, color: saAnswerSource === 'instant' ? '#fde047' : '#34d399' }}>
+                {saAnswerSource === 'instant' ? '⚡ Instant Answer' : '🧠 Scan & Answer'}
+              </span>
+              <button type="button" className="ctc-focus-answer-close" onClick={() => setShowSaAnswer(false)}>✕</button>
+            </div>
+            <div className="ctc-focus-answer-body">{saAnswerText}</div>
+            <div className="ctc-focus-answer-actions">
+              <button type="button" className="ctc-focus-answer-btn" onClick={() => navigator.clipboard.writeText(saAnswerText).then(() => setStatusMsg('Answer copied!'))}>
+                Copy
+              </button>
+              {saAnswerUrl && (
+                <a href={saAnswerUrl} download={saAnswerFilename} style={{ textDecoration: 'none' }}>
+                  <button type="button" className="ctc-focus-answer-btn">Download</button>
+                </a>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
@@ -1611,8 +1647,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
       )}
 
-      {/* Scan & Answer Result Modal */}
-      {showSaAnswer && (
+      {/* Scan & Answer Result Modal — only when not in focus/enlarge mode */}
+      {showSaAnswer && !cameraEnlarged && (
         <div style={s.backdrop} onClick={() => setShowSaAnswer(false)}>
           <div style={{ ...s.modal, maxWidth: 680, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
