@@ -117,6 +117,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [modelTip,     setModelTip]     = useState('Recommended — best balance of speed, accuracy & cost')
   const [modelLabel,   setModelLabel]   = useState('Claude Haiku')
   const [fallbackNotice, setFallbackNotice] = useState('')
+  const [modeDetailsOpen, setModeDetailsOpen] = useState(false)
   const [bulkCapture,  setBulkCapture]  = useState(false)
   const [bulkBlocks,   setBulkBlocks]   = useState(0)
   const [bulkSession,  setBulkSession]  = useState(0)
@@ -920,17 +921,14 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   return (
     <div className="ctc-app" style={s.root}>
       {/* Header */}
-      <div style={s.header}>
-        <span style={s.logo}>CamToCode</span>
-        <div style={s.hRight}>
+      <div className="ctc-header" style={s.header}>
+        <span className="ctc-logo" style={s.logo}>CamToCode</span>
+        <div className="ctc-header-nav" style={s.hRight}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
-          <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug log">🪲</button>
-          <a href="/history" style={s.historyLink}>History</a>
-          <a href="/account" style={s.historyLink}>Account</a>
-          <InstallAppButton variant="compact" />
-          {/* {planUsage?.plan === 'admin' && (
-            <a href="/admin" style={{ ...s.historyLink, color: '#f59e0b' }}>Admin</a>
-          )} */}
+          <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug">🪲</button>
+          <a href="/history" className="ctc-nav-link" style={s.historyLink}>History</a>
+          <a href="/account" className="ctc-nav-link" style={s.historyLink}>Account</a>
+          <span className="ctc-install-wrap"><InstallAppButton variant="compact" /></span>
           <button
             onClick={() => setShowSettings(v => !v)}
             style={{
@@ -939,13 +937,15 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               fontSize: '0.8rem', color: showSettings ? '#818cf8' : '#cbd5e1',
               background: showSettings ? 'rgba(99,102,241,0.15)' : 'transparent',
               border: showSettings ? '1px solid rgba(99,102,241,0.35)' : '1px solid transparent',
-              borderRadius: 8, padding: '0.25rem 0.55rem',
+              borderRadius: 8, padding: '0.25rem 0.45rem',
             }}
+            title="Settings"
           >
             <span style={{ fontSize: '1rem' }}>⚙️</span>
-            {/* <span style={{ fontWeight: 600, letterSpacing: '0.01em' }}>Settings</span> */}
           </button>
-          <button onClick={handleSignOut} style={s.signOutBtn}>Sign Out</button>
+          <button onClick={handleSignOut} className="ctc-signout" style={s.signOutBtn} title="Sign out">
+            Sign Out
+          </button>
         </div>
       </div>
 
@@ -1059,11 +1059,6 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               })}
             </select>
           </div>
-          {modelTip && (
-            <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)', paddingLeft: 2 }}>
-              {modelTip}
-            </div>
-          )}
           {bulkCapture && <>
             <div style={s.row}>
               <span>Session {bulkSession} — {bulkBlocks} blocks</span>
@@ -1077,11 +1072,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
       )}
 
-      {/* Video toolbar */}
-      <div className="ctc-toolbar" style={s.toolbar}>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', flex: 1 }}>
+      {/* Video toolbar + AI model row */}
+      <div className="ctc-toolbar-block">
+        <div className="ctc-toolbar" style={s.toolbar}>
           <button onClick={videoMode === 'camera' ? startScreenCapture : startCamera} style={s.toolBtn}>
-            {videoMode === 'camera' ? '🖥 Screen' : '📷 Camera'}
+            {videoMode === 'camera' ? '🖥 Screen' : '📷 Cam'}
           </button>
           <button
             onClick={() => setFitScreen(f => !f)}
@@ -1093,20 +1088,17 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             onClick={toggleRoiMode}
             style={{ ...s.toolBtn, background: showRoi ? 'rgba(99,102,241,0.4)' : 'rgba(255,255,255,0.07)', borderColor: showRoi ? '#6366f1' : undefined, color: showRoi ? '#a5b4fc' : undefined }}
           >
-            {showRoi ? (roi ? '✂ Region ✓' : '✂ Draw Region') : '✂ Region'}
+            {showRoi ? (roi ? '✂ ✓' : '✂ Draw') : '✂ Region'}
           </button>
+          {videoMode === 'screen' && <span style={s.modeTag}>🖥</span>}
         </div>
-        <div className="ctc-toolbar-right" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexShrink: 0 }}>
-          <AIModelSelector
-            models={aiModels.length ? aiModels : defaultAiModels}
-            selected={llmModel}
-            geminiAvailable={geminiAvailable}
-            sonnetAllowed={planUsage?.sonnet_allowed === true || planUsage?.plan === 'admin'}
-            tip={modelTip}
-            onChange={handleModelChange}
-          />
-          {videoMode === 'screen' && <span style={s.modeTag}>🖥 Screen</span>}
-        </div>
+        <AIModelSelector
+          models={aiModels.length ? aiModels : defaultAiModels}
+          selected={llmModel}
+          geminiAvailable={geminiAvailable}
+          sonnetAllowed={planUsage?.sonnet_allowed === true || planUsage?.plan === 'admin'}
+          onChange={handleModelChange}
+        />
       </div>
 
       {/* ROI preset bar — shown when region mode is active */}
@@ -1174,39 +1166,37 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         </div>
       )}
 
-      {/* Active scan mode banner — always visible */}
-      <div
-        className="ctc-mode-banner"
-        style={{
-          background: scanModeInfo.bg,
-          border: `1px solid ${scanModeInfo.border}`,
-          borderRadius: 10,
-          padding: '0.55rem 0.85rem',
-          margin: '0 0.75rem',
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: 10,
-        }}
-      >
-        <span style={{ fontSize: '1.15rem', flexShrink: 0 }}>{scanModeInfo.icon}</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: scanModeInfo.color }}>
-              {scanModeInfo.title}
-            </span>
-            {scanMode === 'code' && (
-              <span style={{ fontSize: '0.65rem', background: 'rgba(99,102,241,0.2)', color: '#a5b4fc', borderRadius: 4, padding: '1px 6px' }}>
-                Active
-              </span>
-            )}
-            <span style={{ fontSize: '0.65rem', color: 'rgba(255,255,255,0.35)' }}>
+      {/* Scan mode — compact accordion */}
+      <div className="ctc-mode-acc" style={{ borderColor: scanModeInfo.border, background: scanModeInfo.bg }}>
+        <button
+          type="button"
+          className="ctc-mode-acc-head"
+          onClick={() => setModeDetailsOpen(v => !v)}
+          aria-expanded={modeDetailsOpen}
+        >
+          <span style={{ color: scanModeInfo.color, fontWeight: 700 }}>
+            Mode: {scanModeInfo.title}
+          </span>
+          <span className="ctc-mode-acc-arrow">{modeDetailsOpen ? '▼' : '▶'}</span>
+        </button>
+        {modeDetailsOpen && (
+          <div className="ctc-mode-acc-body">
+            <div style={{ fontSize: '0.74rem', color: 'rgba(255,255,255,0.55)', lineHeight: 1.45 }}>
+              {scanModeInfo.desc}
+            </div>
+            <div style={{ fontSize: '0.7rem', color: 'rgba(255,255,255,0.4)', marginTop: 4 }}>
               AI: {modelLabel}
-            </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setModeDetailsOpen(false)}
+              className="ctc-mode-acc-close"
+              title="Close"
+            >
+              ✕
+            </button>
           </div>
-          <div style={{ fontSize: '0.74rem', color: 'rgba(255,255,255,0.55)', marginTop: 4, lineHeight: 1.45 }}>
-            {scanModeInfo.desc}
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Video container */}
@@ -1693,13 +1683,13 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
 }
 
 const s: Record<string, React.CSSProperties> = {
-  root:         { minHeight: '100vh', background: '#1a1a2e', color: '#e2e8f0', display: 'flex', flexDirection: 'column', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif' },
-  header:       { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 1rem', background: 'rgba(0,0,0,0.35)', borderBottom: '1px solid rgba(255,255,255,0.08)' },
-  logo:         { fontWeight: 800, fontSize: '1.1rem', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' },
-  hRight:       { display: 'flex', alignItems: 'center', gap: 8 },
-  historyLink:  { color: '#818cf8', fontSize: '0.8rem', textDecoration: 'none' },
-  iconBtn:      { background: 'transparent', border: 'none', fontSize: '1.1rem', padding: '0.25rem', cursor: 'pointer' },
-  signOutBtn:   { background: 'rgba(239,68,68,0.2)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 8, padding: '0.3rem 0.6rem', fontSize: '0.75rem', cursor: 'pointer' },
+  root:         { minHeight: '100vh', background: '#1a1a2e', color: '#e2e8f0', display: 'flex', flexDirection: 'column', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', overflowX: 'hidden', maxWidth: '100vw' },
+  header:       { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0.65rem', background: 'rgba(0,0,0,0.35)', borderBottom: '1px solid rgba(255,255,255,0.08)', gap: 6, flexWrap: 'wrap' },
+  logo:         { fontWeight: 800, fontSize: '1rem', background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', flexShrink: 0 },
+  hRight:       { display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end', flex: '1 1 auto', minWidth: 0 },
+  historyLink:  { color: '#818cf8', fontSize: '0.72rem', textDecoration: 'none', whiteSpace: 'nowrap' },
+  iconBtn:      { background: 'transparent', border: 'none', fontSize: '1rem', padding: '0.2rem', cursor: 'pointer', flexShrink: 0 },
+  signOutBtn:   { background: 'rgba(239,68,68,0.2)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 7, padding: '0.22rem 0.5rem', fontSize: '0.68rem', cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 },
   debugPanel:   { background: '#0a0a1a', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.5rem 0.75rem', maxHeight: 200, overflowY: 'auto' },
   settingsPanel:{ background: 'rgba(0,0,0,0.5)', borderBottom: '1px solid rgba(255,255,255,0.08)', padding: '0.6rem 0.85rem', display: 'flex', flexDirection: 'column', gap: 8 },
   row:          { display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.82rem', gap: 8, minHeight: 32 },
@@ -1708,14 +1698,14 @@ const s: Record<string, React.CSSProperties> = {
   toggleInput:  { position: 'absolute', opacity: 0, width: 0, height: 0 },
   toggleSlider: { position: 'absolute', inset: 0, borderRadius: 12, transition: 'background 0.3s' },
   toggleKnob:   { position: 'absolute', top: 3, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left 0.3s', boxShadow: '0 1px 3px rgba(0,0,0,0.4)' },
-  toolbar:      { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.35rem 0.75rem', background: 'rgba(0,0,0,0.2)', borderBottom: '1px solid rgba(255,255,255,0.05)', gap: 8 },
-  toolBtn:      { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', borderRadius: 8, padding: '0.25rem 0.7rem', fontSize: '0.75rem', cursor: 'pointer' },
+  toolbar:      { display: 'flex', alignItems: 'center', gap: 6, padding: '0.3rem 0.65rem', background: 'rgba(0,0,0,0.2)', flexWrap: 'wrap' },
+  toolBtn:      { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', color: '#e2e8f0', borderRadius: 7, padding: '0.22rem 0.55rem', fontSize: '0.72rem', cursor: 'pointer', whiteSpace: 'nowrap' },
   modeTag:      { background: 'rgba(99,102,241,0.25)', color: '#818cf8', borderRadius: 6, padding: '2px 8px', fontSize: '0.72rem', whiteSpace: 'nowrap' },
   roiBar:       { display: 'flex', alignItems: 'center', gap: 6, padding: '0.3rem 0.75rem', background: 'rgba(99,102,241,0.1)', borderBottom: '1px solid rgba(99,102,241,0.2)', flexWrap: 'wrap' },
   roiPresetBtn: { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: '#c7d2fe', borderRadius: 6, padding: '0.15rem 0.55rem', fontSize: '0.72rem', cursor: 'pointer' },
   roiHint:      { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.35)', fontSize: '0.85rem', pointerEvents: 'none', zIndex: 12 },
-  camWrap:      { position: 'relative', flex: '1 0 auto', minHeight: '42vh', background: '#000', overflow: 'hidden' },
-  video:        { width: '100%', height: '100%' },
+  camWrap:      { position: 'relative', width: '100%', height: 'clamp(180px, 32vh, 280px)', minHeight: 0, flex: '0 0 auto', background: '#000', overflow: 'hidden' },
+  video:        { width: '100%', height: '100%', display: 'block', objectFit: 'contain' },
   badge:        { position: 'absolute', top: 8, right: 8, border: '1px solid', borderRadius: 6, padding: '2px 8px', fontSize: '0.68rem', background: 'rgba(0,0,0,0.65)', fontFamily: 'monospace' },
   glare:        { position: 'absolute', bottom: 8, left: 8, background: 'rgba(234,179,8,0.9)', color: '#000', borderRadius: 6, padding: '3px 10px', fontSize: '0.72rem', fontWeight: 700 },
   zoom:         { position: 'absolute', bottom: 8, right: 8, background: 'rgba(0,0,0,0.75)', color: '#fbbf24', borderRadius: 6, padding: '3px 10px', fontSize: '0.72rem' },

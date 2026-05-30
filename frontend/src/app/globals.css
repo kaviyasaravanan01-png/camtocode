@@ -20,6 +20,7 @@ html, body {
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 button {
@@ -64,76 +65,198 @@ code, pre {
   font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
 }
 
-/* ── CamToCode /app mobile layout ── */
+/* ── CamToCode /app layout ── */
+.ctc-app {
+  overflow-x: hidden;
+  max-width: 100vw;
+}
+
+/* Header — keep Sign Out visible on mobile */
+.ctc-header {
+  row-gap: 4px;
+}
+
+.ctc-header-nav {
+  max-width: 100%;
+}
+
+.ctc-signout {
+  order: 99;
+}
+
+/* Toolbar block */
+.ctc-toolbar-block {
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.ctc-toolbar {
+  border-bottom: none !important;
+}
+
+/* AI model — label + dropdown on one line */
+.ctc-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.35rem 0.65rem;
+  background: rgba(0,0,0,0.15);
+  min-width: 0;
+}
+
+.ctc-model-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: rgba(255,255,255,0.5);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.ctc-model-select-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(99,102,241,0.35);
+  border-radius: 7px;
+  color: #e2e8f0;
+  padding: 0.28rem 0.45rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+/* Mode accordion */
+.ctc-mode-acc {
+  margin: 0.35rem 0.65rem 0;
+  border: 1px solid;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.ctc-mode-acc-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0.4rem 0.65rem;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  cursor: pointer;
+  text-align: left;
+}
+
+.ctc-mode-acc-arrow {
+  font-size: 0.6rem;
+  color: rgba(255,255,255,0.35);
+  flex-shrink: 0;
+}
+
+.ctc-mode-acc-body {
+  position: relative;
+  padding: 0 0.65rem 0.5rem;
+}
+
+.ctc-mode-acc-close {
+  position: absolute;
+  top: 0;
+  right: 0.4rem;
+  background: none !important;
+  border: none !important;
+  color: rgba(255,255,255,0.35) !important;
+  font-size: 0.85rem !important;
+  padding: 0.15rem 0.35rem !important;
+  cursor: pointer;
+}
+
+/* Camera — fixed height, no horizontal scroll */
 .ctc-app .ctc-cam-wrap {
-  min-height: 42vh;
-  max-height: none;
+  width: 100%;
+  max-width: 100%;
+  height: clamp(180px, 32vh, 280px);
+  min-height: 0;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.ctc-app .ctc-cam-wrap video {
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100%;
+  object-fit: contain !important;
 }
 
 .ctc-app .ctc-controls {
-  gap: 8px;
-  padding: 0.45rem 0.75rem;
+  gap: 6px;
+  padding: 0.4rem 0.65rem;
+  flex-shrink: 0;
 }
 
 .ctc-app .ctc-ctrl-btn {
-  padding: 0.45rem 0.85rem !important;
-  font-size: 0.82rem !important;
+  padding: 0.4rem 0.7rem !important;
+  font-size: 0.78rem !important;
   min-width: 0 !important;
-  border-radius: 10px !important;
+  border-radius: 9px !important;
 }
 
 .ctc-app .ctc-start-btn,
 .ctc-app .ctc-stop-btn {
-  padding: 0.45rem 1rem !important;
-  font-size: 0.82rem !important;
-  min-width: 88px !important;
-  border-radius: 10px !important;
+  padding: 0.4rem 0.85rem !important;
+  font-size: 0.78rem !important;
+  min-width: 76px !important;
+  border-radius: 9px !important;
 }
 
 .ctc-app .ctc-recapture-banner {
-  padding: 0.45rem 0.75rem !important;
-  margin: 0 0.75rem;
+  padding: 0.35rem 0.65rem !important;
+  margin: 0.25rem 0.65rem !important;
+  flex-shrink: 0;
 }
 
 .ctc-app .ctc-recapture-count {
-  font-size: 1.35rem !important;
-  min-width: 28px !important;
-}
-
-.ctc-app .ctc-output-wrap {
-  margin-top: 0.35rem;
+  font-size: 1.1rem !important;
+  min-width: 24px !important;
 }
 
 .ctc-app .ctc-output-pre {
-  max-height: min(38vh, 320px);
+  max-height: min(28vh, 240px);
+}
+
+.ctc-app .ctc-usage-acc {
+  margin: 0.35rem 0.65rem 0;
 }
 
 @media (max-width: 640px) {
+  .ctc-nav-link {
+    display: none;
+  }
+
+  .ctc-install-wrap button {
+    padding: 0.2rem 0.4rem !important;
+    font-size: 0.68rem !important;
+  }
+
+  .ctc-logo {
+    font-size: 0.92rem !important;
+  }
+
+  .ctc-signout {
+    padding: 0.2rem 0.45rem !important;
+    font-size: 0.65rem !important;
+  }
+
   .ctc-app .ctc-cam-wrap {
-    min-height: min(58vh, 520px);
-    flex: 1 0 auto;
-  }
-
-  .ctc-app .ctc-toolbar {
-    flex-wrap: wrap;
-    align-items: flex-start;
-  }
-
-  .ctc-app .ctc-toolbar-right {
-    width: 100%;
-    justify-content: flex-end;
-  }
-
-  .ctc-model-select {
-    max-width: 100% !important;
-    flex: 1 1 100% !important;
-  }
-
-  .ctc-app .ctc-mode-banner {
-    margin: 0 0.75rem;
+    height: clamp(160px, 28vh, 220px);
   }
 
   .ctc-app .ctc-output-pre {
-    max-height: min(45vh, 400px);
+    max-height: min(24vh, 200px);
+  }
+}
+
+@media (max-width: 380px) {
+  .ctc-install-wrap {
+    display: none;
   }
 }
