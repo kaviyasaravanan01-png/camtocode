@@ -161,7 +161,7 @@ export default function AdminDashboard({ userEmail }: { userEmail: string }) {
                   <span title="Scans this month">📅 {u.scans_month}</span>
                   <span title="AI fixes this month">🤖 {u.ai_fixes_month}</span>
                   <span title="Files saved">📁 {u.files_saved}</span>
-                  <span title="Haiku+Sonnet fix tokens">🧠 {fmt(u.haiku_fix_tok + u.sonnet_fix_tok)}</span>
+                  <span title="Standard+Precision OCR fix tokens">🧠 {fmt(u.haiku_fix_tok + u.sonnet_fix_tok)}</span>
                   {u.plan_expires_at && u.plan !== 'admin' && (() => {
                     const days = Math.ceil((new Date(u.plan_expires_at).getTime() - Date.now()) / 86_400_000)
                     return (
@@ -222,11 +222,11 @@ export default function AdminDashboard({ userEmail }: { userEmail: string }) {
                 </div>
                 <div style={s.statBox}>
                   <span style={s.statNum}>{fmt(selectedUser.haiku_fix_tok)}</span>
-                  <span style={s.statLabel}>Haiku tokens</span>
+                  <span style={s.statLabel}>Standard OCR tokens</span>
                 </div>
                 <div style={s.statBox}>
                   <span style={s.statNum}>{fmt(selectedUser.sonnet_fix_tok)}</span>
-                  <span style={s.statLabel}>Sonnet tokens</span>
+                  <span style={s.statLabel}>Precision OCR tokens</span>
                 </div>
               </div>
               {filesLoading && <p style={s.dim}>Loading files…</p>}

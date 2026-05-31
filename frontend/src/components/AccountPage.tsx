@@ -19,11 +19,11 @@ const PLAN_LABEL: Record<string, string> = {
 const PLAN_FEATURES: Record<string, string[]> = {
   free:        ['3 AI scans/day', '20 scans/day', '200/month', 'Top 100 lines', '10 saved files', '1 S&A/day (10 lines)', 'No AI Fix'],
   starter:     ['200 AI scans/day', '6,000 scans/month', '15 AI fixes/month', 'Top 300 lines', '500 saved files', 'No Scan & Answer'],
-  pro:         ['500 AI scans/day', '15,000 scans/month', '75 AI fixes/month', 'Top 1,000 lines', '1,000 saved files', 'Sonnet for large files', 'No Scan & Answer'],
+  pro:         ['500 AI scans/day', '15,000 scans/month', '75 AI fixes/month', 'Top 1,000 lines', '1,000 saved files', 'Precision OCR for large files', 'No Scan & Answer'],
   starter_sa:  ['200 AI scans/day', '6,000 scans/month', '15 AI fixes/month', 'Top 300 lines', '500 saved files', '20 Scan & Answer/day', '300-line S&A buffer'],
-  pro_sa:      ['500 AI scans/day', '15,000 scans/month', '75 AI fixes/month', 'Top 1,000 lines', '1,000 saved files', 'Sonnet for large files', '50 Scan & Answer/day', '1,000-line S&A buffer'],
+  pro_sa:      ['500 AI scans/day', '15,000 scans/month', '75 AI fixes/month', 'Top 1,000 lines', '1,000 saved files', 'Precision OCR for large files', '50 Scan & Answer/day', '1,000-line S&A buffer'],
   scan_answer: ['20 AI scans/day (S&A only)', '30 scans/day', '20 Scan & Answer/day', '200-line S&A buffer', '100 answer files', 'No AI Fix'],
-  admin:       ['Unlimited everything', 'Claude Sonnet enabled', 'No limits'],
+  admin:       ['Unlimited everything', 'Precision OCR enabled', 'No limits'],
 }
 
 interface PlanData {
@@ -249,9 +249,9 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
               {/* Token detail */}
               {data.ai_fix_allowed && (
                 <div style={s.tokenDetail}>
-                  <span style={s.dim}>Haiku tokens: {fmtTokens(data.haiku_fix_tokens)}</span>
+                  <span style={s.dim}>Standard OCR tokens: {fmtTokens(data.haiku_fix_tokens)}</span>
                   {data.sonnet_allowed && (
-                    <span style={s.dim}>Sonnet tokens: {fmtTokens(data.sonnet_fix_tokens)}</span>
+                    <span style={s.dim}>Precision OCR tokens: {fmtTokens(data.sonnet_fix_tokens)}</span>
                   )}
                   <span style={s.dim}>Budget: {fmtTokens(data.fix_token_budget)}</span>
                 </div>
@@ -260,7 +260,7 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
               {/* Limits note */}
               <div style={s.limitsNote}>
                 <span style={s.noteItem}>✂ Max {data.max_lines_scan.toLocaleString()} lines per scan</span>
-                {data.sonnet_allowed && <span style={s.noteItem}>✅ Claude Sonnet enabled for large files</span>}
+                {data.sonnet_allowed && <span style={s.noteItem}>✅ Precision OCR enabled for large files</span>}
                 {!data.ai_fix_allowed && <span style={{ ...s.noteItem, color: '#f87171' }}>❌ AI Fix not available on Free plan</span>}
                 {data.scan_answer_day_limit > 0
                   ? <span style={{ ...s.noteItem, color: '#34d399' }}>🧠 Scan & Answer: {data.scan_answer_max_lines}-line buffer</span>
@@ -278,7 +278,7 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
                 {plan === 'free'
                   ? 'Unlock AI Fix, more scans, and cloud file storage with Starter or Pro.'
                   : plan === 'starter'
-                  ? 'Go Pro for 5× more scans, 5× more files, and Claude Sonnet. Or add Scan & Answer to your current plan.'
+                  ? 'Go Pro for 5× more scans, 5× more files, and Precision OCR. Or add Scan & Answer to your current plan.'
                   : 'Add Scan & Answer to unlock AI-powered question answering on your scans.'}
               </p>
               <div style={s.upgradeGrid}>

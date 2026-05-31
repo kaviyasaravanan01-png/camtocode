@@ -159,7 +159,7 @@ export default function UsageBadge({ usage, compact = false }: { usage: PlanUsag
         {!usage.ai_fix_allowed && <span style={s.note}>❌ AI Fix — upgrade to Starter</span>}
         {usage.scan_answer_day_limit === 0 && <span style={s.note}>❌ Scan & Answer — add S&A plan</span>}
         {usage.max_lines_scan < 9999 && <span style={s.note}>✂ Top {usage.max_lines_scan} lines per scan</span>}
-        {usage.sonnet_allowed && <span style={s.note}>✅ Sonnet for large files</span>}
+        {usage.sonnet_allowed && <span style={s.note}>✅ Precision OCR for large files</span>}
         {usage.scan_answer_day_limit > 0 && <span style={s.note}>✅ Scan & Answer ({usage.scan_answer_max_lines} lines)</span>}
       </div>
 

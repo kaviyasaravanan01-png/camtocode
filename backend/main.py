@@ -71,8 +71,13 @@ ADMIN_EMAILS: set[str] = {
 SCAN_COOLDOWN_SECS   = 3      # minimum seconds between any two scans
 SCAN_RATE_PER_MINUTE = 8      # rolling-window cap
 
-# Default AI model key (haiku recommended)
-DEFAULT_AI_MODEL_KEY = "haiku"
+# Guest demo (pre-login try page)
+GUEST_SCAN_LIMIT     = 1
+GUEST_MAX_LINES      = 80
+GUEST_QUOTA_TTL_SECS = 86400  # 1 scan per device/IP per 24h
+
+# Default AI model for new sessions (Standard OCR stays "recommended" in UI)
+DEFAULT_AI_MODEL_KEY = "gemini_lite"
 
 PLANS: dict[str, dict] = {
     # ── Free ──────────────────────────────────────────────────────────────
@@ -252,32 +257,32 @@ LLM_MODELS = {
 
 # Unified AI model registry (scans, S&A, Instant Answer, AI Fix)
 AI_MODELS: dict[str, dict] = {
+    "gemini_lite": {
+        "provider": "google",
+        "model_id": "gemini-2.5-flash-lite",
+        "label": "Quick OCR",
+        "tip": "Fastest reads — great for clear screenshots and short snippets",
+        "recommended": False,
+    },
     "haiku": {
         "provider": "anthropic",
         "model_id": "claude-haiku-4-5-20251001",
-        "label": "Claude Haiku",
+        "label": "Standard OCR",
         "tip": "Recommended — best balance of speed, accuracy & cost",
         "recommended": True,
     },
     "sonnet": {
         "provider": "anthropic",
         "model_id": "claude-sonnet-4-6",
-        "label": "Claude Sonnet",
+        "label": "Precision OCR",
         "tip": "Highest accuracy for large or complex files (Pro plan)",
-        "recommended": False,
-    },
-    "gemini_lite": {
-        "provider": "google",
-        "model_id": "gemini-2.5-flash-lite",
-        "label": "Gemini 2.5 Flash Lite",
-        "tip": "Fastest & cheapest — great for simple scans and MCQs",
         "recommended": False,
     },
     "gemini_flash": {
         "provider": "google",
         "model_id": "gemini-2.5-flash",
-        "label": "Gemini 2.5 Flash",
-        "tip": "Balanced Gemini model — good accuracy at low cost",
+        "label": "Smart OCR",
+        "tip": "Better on glare, angles, and denser code blocks",
         "recommended": False,
     },
 }
@@ -286,8 +291,12 @@ AI_MODELS: dict[str, dict] = {
 _MODEL_ALIASES: dict[str, str] = {"gemini": "gemini_flash"}
 
 def _normalize_model_key(key: str) -> str:
-    k = (key or "haiku").strip().lower()
+    k = (key or DEFAULT_AI_MODEL_KEY).strip().lower()
     return _MODEL_ALIASES.get(k, k)
+
+def _model_label(key: str) -> str:
+    cfg = AI_MODELS.get(_normalize_model_key(key))
+    return cfg["label"] if cfg else key
 
 def _is_google_model_key(key: str) -> bool:
     cfg = AI_MODELS.get(_normalize_model_key(key))
@@ -297,17 +306,17 @@ def _anthropic_ready() -> bool:
     return HAS_ANTHROPIC and bool(os.environ.get("ANTHROPIC_API_KEY", ""))
 
 def _notify_model_fallback(sid: str | None, from_key: str, reason: str):
-    """Tell the client we switched from Gemini (or other) to Haiku."""
-    from_cfg = AI_MODELS.get(_normalize_model_key(from_key), {})
-    from_label = from_cfg.get("label", from_key)
+    """Tell the client we switched to Standard OCR fallback."""
+    from_label = _model_label(from_key)
+    to_label = AI_MODELS["haiku"]["label"]
     short_reason = reason.strip()[:120] or "request failed"
-    msg = f"{from_label} failed ({short_reason}) — switched to Claude Haiku"
+    msg = f"{from_label} failed ({short_reason}) — switched to {to_label}"
     print(f"[model_fallback] {msg}", flush=True)
     if sid:
         _emit_to(sid, "model_fallback", {
             "from_model": from_key,
             "to_model":   "haiku",
-            "to_label":   AI_MODELS["haiku"]["label"],
+            "to_label":   to_label,
             "msg":        msg,
         })
         _emit_to(sid, "status", {"msg": msg})
@@ -324,20 +333,20 @@ def _has_gemini() -> bool:
 
 def resolve_ai_model(sess: "UserSession | None", model_key: str | None = None) -> tuple[dict | None, str, str]:
     """Return (config, resolved_key, error_msg). error_msg empty when OK."""
-    key = _normalize_model_key(model_key or (sess.llm_model_key if sess else "haiku") or "haiku")
+    key = _normalize_model_key(model_key or (sess.llm_model_key if sess else DEFAULT_AI_MODEL_KEY) or DEFAULT_AI_MODEL_KEY)
     if key not in AI_MODELS:
         key = "haiku"
     if sess and key == "sonnet" and not _is_admin(sess) and not sess.plan_limits.get("sonnet_allowed"):
-        return None, key, "Claude Sonnet requires a Pro plan. Using Haiku instead."
+        return None, key, "Precision OCR requires a Pro plan. Using Standard OCR instead."
     cfg = AI_MODELS[key]
     if cfg["provider"] == "anthropic":
         if not _anthropic_ready():
-            return None, key, "Anthropic API not configured on server."
+            return None, key, "AI OCR service not configured on server."
     elif cfg["provider"] == "google":
         if not _has_gemini():
-            return None, key, "Gemini API not configured — add GOOGLE_API_KEY on the server."
+            return None, key, "Quick OCR is not available on the server."
         if not _anthropic_ready():
-            return None, key, "Gemini selected but Anthropic (Haiku fallback) is not configured."
+            return None, key, "Quick OCR selected but Standard OCR fallback is not configured."
     return cfg, key, ""
 
 def _session_ai_ready(sess: "UserSession") -> bool:
@@ -554,7 +563,7 @@ class UserSession:
         self._recapture_stop: threading.Event | None = None
         self.next_start_is_recapture   = False  # Set before recapture trigger so on_start() skips file clear
         self.language_hint         = ""
-        self.llm_model_key         = "haiku"
+        self.llm_model_key         = DEFAULT_AI_MODEL_KEY
         self.bulk_capture          = False
         self.bulk_session_blocks   = 0
         self.bulk_session_number   = 0
@@ -582,6 +591,12 @@ class UserSession:
         self._stop_processing          = False   # guard against overlapping stop OCR
         self._sa_answering             = False   # guard against overlapping S&A requests
         self.instant_answer_mode       = False   # one-shot vision Q&A per capture
+        # ── Guest demo (no login) ─────────────────────────────────────────
+        self.is_guest                  = False
+        self.guest_fingerprint         = ""
+        self.guest_client_ip           = ""
+        self.guest_scans_completed     = 0
+        self.guest_quota_blocked       = False
 
     def active_model(self) -> str:
         cfg, _, _ = resolve_ai_model(self)
@@ -590,14 +605,116 @@ class UserSession:
 _sessions: dict[str, UserSession] = {}
 _sessions_lock = threading.Lock()
 
+_guest_quota_lock = threading.Lock()
+_guest_quotas: dict[str, float] = {}  # fingerprint/IP key → expiry epoch
+
 # Per-user Scan & Answer session buffers (in-memory)
 _sa_sessions: dict[str, dict] = {}
 
 def get_session(sid: str) -> UserSession:
     with _sessions_lock:
         if sid not in _sessions:
-            _sessions[sid] = UserSession(sid)
+            sess = UserSession(sid)
+            _, resolved, err = resolve_ai_model(sess, DEFAULT_AI_MODEL_KEY)
+            sess.llm_model_key = resolved if not err else "haiku"
+            _sessions[sid] = sess
         return _sessions[sid]
+
+
+def _client_ip() -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.remote_addr or "unknown"
+
+
+def _guest_quota_key(ip: str, fingerprint: str) -> str:
+    fp = (fingerprint or "").strip()[:128]
+    return f"{ip}:{fp}" if fp else ip
+
+
+def _guest_quota_exceeded(ip: str, fingerprint: str) -> bool:
+    key = _guest_quota_key(ip, fingerprint)
+    now = _time.time()
+    with _guest_quota_lock:
+        exp = _guest_quotas.get(key)
+        if exp and exp > now:
+            return True
+        if exp:
+            del _guest_quotas[key]
+        return False
+
+
+def _record_guest_quota(ip: str, fingerprint: str) -> None:
+    key = _guest_quota_key(ip, fingerprint)
+    with _guest_quota_lock:
+        _guest_quotas[key] = _time.time() + GUEST_QUOTA_TTL_SECS
+
+
+def _configure_guest_session(sess: UserSession) -> None:
+    fp = (request.args.get("guest_fp") or "").strip()[:128]
+    ip = _client_ip()
+    sess.is_guest = True
+    sess.guest_fingerprint = fp
+    sess.guest_client_ip = ip
+    sess.guest_quota_blocked = _guest_quota_exceeded(ip, fp)
+    sess.ai_enabled = True
+    sess.auto_capture = False
+    sess.auto_recapture_enabled = False
+    sess.instant_answer_mode = False
+    sess.llm_model_key = DEFAULT_AI_MODEL_KEY
+    _, resolved, err = resolve_ai_model(sess, DEFAULT_AI_MODEL_KEY)
+    if err:
+        sess.llm_model_key = "haiku"
+    if sess.guest_quota_blocked:
+        sess.guest_scans_completed = GUEST_SCAN_LIMIT
+
+
+def _guest_scan_allowed(sess: UserSession) -> tuple[bool, str]:
+    if not sess.is_guest:
+        return True, ""
+    if sess.guest_quota_blocked:
+        return False, "Demo already used on this device — sign in for your free account"
+    if sess.guest_scans_completed >= GUEST_SCAN_LIMIT:
+        return False, "Demo scan used — sign in to copy, save & get your free tier"
+    return True, ""
+
+
+def _emit_guest_state(sess: UserSession, sid: str | None = None) -> None:
+    if not sess.is_guest:
+        return
+    target = sid or sess.sid
+    remaining = max(0, GUEST_SCAN_LIMIT - sess.guest_scans_completed)
+    payload = {
+        "scans_remaining": remaining,
+        "scans_limit": GUEST_SCAN_LIMIT,
+        "demo_used": remaining <= 0 or sess.guest_quota_blocked,
+        "quota_blocked": sess.guest_quota_blocked,
+    }
+    if target:
+        _emit_to(target, "guest_state", payload)
+
+
+def _finalize_guest_scan(sess: UserSession, sid: str) -> None:
+    if not sess.is_guest:
+        return
+    sess.guest_scans_completed += 1
+    _record_guest_quota(sess.guest_client_ip, sess.guest_fingerprint)
+    sess.guest_quota_blocked = True
+    _emit_guest_state(sess, sid)
+
+
+def _guest_only_feature(sess: UserSession) -> bool:
+    if not sess.is_guest:
+        return False
+    emit("guest_error", {"msg": "Sign in to unlock this feature"})
+    return True
+
+
+def _scan_max_lines(sess: UserSession) -> int:
+    if sess.is_guest:
+        return GUEST_MAX_LINES
+    return sess.plan_limits.get("max_lines_scan", 99999)
 
 
 def _cancel_recapture_timer(sess: UserSession, paused_remaining: int | None = None):
@@ -1100,7 +1217,7 @@ def _is_admin(sess: "UserSession") -> bool:
 
 def check_rate_limits(sess: "UserSession") -> tuple[bool, str]:
     """Check 3s cooldown and 8/min rolling window. Returns (ok, msg)."""
-    if _is_admin(sess):
+    if _is_admin(sess) or sess.is_guest:
         return True, ""
     now = _time.time()
     elapsed = now - sess.last_scan_completed_at
@@ -1115,6 +1232,8 @@ def check_rate_limits(sess: "UserSession") -> tuple[bool, str]:
 
 def check_scan_limits(sess: "UserSession", is_ai: bool) -> tuple[bool, str]:
     """Check daily + monthly scan limits. Returns (ok, msg)."""
+    if sess.is_guest:
+        return _guest_scan_allowed(sess)
     if _is_admin(sess):
         return True, ""
     lim = sess.plan_limits
@@ -1170,6 +1289,8 @@ def check_file_save_limit(sess: "UserSession") -> tuple[bool, str]:
 
 def record_scan(sess: "UserSession", is_ai: bool) -> None:
     """Record a completed scan: update session cache + DB."""
+    if sess.is_guest:
+        return
     now = _time.time()
     sess.last_scan_completed_at = now
     sess.scan_timestamps.append(now)
@@ -2128,6 +2249,7 @@ def on_connect():
     sid  = request.sid
     sess = get_session(sid)
     token = request.args.get("token", "")
+    guest_mode = request.args.get("guest", "").lower() in ("1", "true", "yes")
     if token:
         payload = verify_supabase_token(token)
         if payload:
@@ -2135,6 +2257,26 @@ def on_connect():
             sess.user_email = payload.get("email", "")
             print(f"[connect] user={sess.user_email} sid={sid}", flush=True)
             load_user_plan_usage(sess)
+    elif guest_mode:
+        _configure_guest_session(sess)
+        print(f"[connect] guest sid={sid} ip={sess.guest_client_ip}", flush=True)
+
+    guest_models = [{
+        "key": "gemini_lite",
+        "label": AI_MODELS["gemini_lite"]["label"],
+        "tip": AI_MODELS["gemini_lite"].get("tip", ""),
+        "recommended": False,
+        "provider": "google",
+    }] if sess.is_guest else [
+        {
+            "key": k,
+            "label": v["label"],
+            "tip": v.get("tip", ""),
+            "recommended": v.get("recommended", False),
+            "provider": v["provider"],
+        }
+        for k, v in AI_MODELS.items()
+    ]
 
     emit("init_state", {
         "ai_enabled":              sess.ai_enabled,
@@ -2152,19 +2294,16 @@ def on_connect():
         "instant_answer_mode":     sess.instant_answer_mode,
         "user_id":                 sess.user_id,
         "user_email":              sess.user_email,
-        "ai_models": [
-            {
-                "key": k,
-                "label": v["label"],
-                "tip": v.get("tip", ""),
-                "recommended": v.get("recommended", False),
-                "provider": v["provider"],
-            }
-            for k, v in AI_MODELS.items()
-        ],
-        "gemini_available": _has_gemini(),
+        "is_guest":                sess.is_guest,
+        "guest_scans_remaining":   max(0, GUEST_SCAN_LIMIT - sess.guest_scans_completed) if sess.is_guest else None,
+        "guest_scans_limit":       GUEST_SCAN_LIMIT if sess.is_guest else None,
+        "guest_demo_blocked":      sess.guest_quota_blocked if sess.is_guest else False,
+        "ai_models":               guest_models,
+        "gemini_available":        _has_gemini(),
         "plan_usage":              plan_usage_payload(sess),
     })
+    if sess.is_guest:
+        _emit_guest_state(sess, sid)
 
 
 @socketio.on("disconnect")
@@ -2201,6 +2340,12 @@ def on_set_language(data):
 @socketio.on("start")
 def on_start():
     sess = get_session(request.sid)
+    if sess.is_guest:
+        ok, msg = _guest_scan_allowed(sess)
+        if not ok:
+            emit("status", {"capturing": False, "processing": False, "msg": msg, "guest_limit": True})
+            _emit_guest_state(sess)
+            return
     sess.capturing    = True
     sess.consec_sharp = 0
     sess.frame_buf.clear()
@@ -2291,7 +2436,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
         # Primary: Claude Vision (ALWAYS Haiku — enforced by VISION_OCR_MODEL)
         if _session_ai_ready(sess):
             _emit_to(sid, "status", {"capturing": False, "processing": True,
-                                     "msg": f"Reading code with AI ({sess.llm_model_key})..."})
+                                     "msg": f"Reading code with {_model_label(sess.llm_model_key)}..."})
             try:
                 best_img        = _best_frame(rgb_buf)
                 b64, media_type = _encode_for_vision(best_img)
@@ -2356,17 +2501,17 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
             return
 
         # ── Enforce plan line cap before any LLM call ────────────────────
-        max_lines = sess.plan_limits.get("max_lines_scan", 99999)
+        max_lines = _scan_max_lines(sess)
         lines = text.splitlines()
         if len(lines) > max_lines:
             text = "\n".join(lines[:max_lines])
-            _emit_to(sid, "status", {"capturing": False, "processing": True,
-                                     "msg": f"Truncated to {max_lines} lines (plan limit). Upgrade for more."})
+            trunc_msg = f"Truncated to {max_lines} lines (demo limit)." if sess.is_guest else f"Truncated to {max_lines} lines (plan limit). Upgrade for more."
+            _emit_to(sid, "status", {"capturing": False, "processing": True, "msg": trunc_msg})
 
         lang = sess.language_hint if sess.language_hint else detect_language(text)
 
-        # Syntax-guided repair (Haiku only — no additional plan check needed)
-        if not ai_used and _session_ai_ready(sess) and lang == "python":
+        # Syntax-guided repair (skip extra AI passes on guest demo)
+        if not sess.is_guest and not ai_used and _session_ai_ready(sess) and lang == "python":
             try:
                 ok, err = check_python_syntax(text)
                 if not ok and err:
@@ -2379,8 +2524,8 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
             except Exception:
                 pass
 
-        # Full LLM correction
-        if not ai_used and _session_ai_ready(sess):
+        # Full LLM correction (logged-in users only)
+        if not sess.is_guest and not ai_used and _session_ai_ready(sess):
             _emit_to(sid, "status", {"capturing": False, "processing": True, "msg": "AI correcting code..."})
             corrected = llm_correct_code(text, lang, best_line_confs if best_line_confs else None, sess)
             if corrected and corrected != text:
@@ -2439,6 +2584,8 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
                 pass
 
         record_scan(sess, is_ai=is_ai_scan and ai_used)
+        if sess.is_guest:
+            _finalize_guest_scan(sess, sid)
 
         _bulk_block_num = None
         if sess.bulk_capture:
@@ -2449,11 +2596,15 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
             "text": text, "lang": lang, "ai_used": ai_used,
             "syntax_ok": syntax_ok, "syntax_err": syntax_err,
             "plan_usage": plan_usage_payload(sess),
+            "guest_demo": sess.is_guest,
         })
+        done_msg = "Demo scan complete — sign in to copy & save" if sess.is_guest else (
+            f"Block {_bulk_block_num} saved" if _bulk_block_num else "Saved"
+        )
         _status_data: dict = {
             "capturing": False,
             "processing": False,
-            "msg": (f"Block {_bulk_block_num} saved" if _bulk_block_num else "Saved"),
+            "msg": done_msg,
         }
         if _bulk_block_num is not None:
             _status_data["bulk_block"] = _bulk_block_num
@@ -2463,7 +2614,7 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
             supabase_write_text(_sb_storage_path(sess.user_id), "")
             _emit_to(sid, "status", {"processing": False, "msg": "Auto-cleared for next session"})
 
-        if sess.auto_recapture_enabled and not sess.auto_recapture_active:
+        if sess.auto_recapture_enabled and not sess.auto_recapture_active and not sess.is_guest:
             _start_recapture_countdown(sid, sess)
     finally:
         sess._stop_processing = False
@@ -2473,6 +2624,12 @@ def _process_stop_scan(sid: str, buf: list, rgb_buf: list, is_ai_scan: bool):
 def on_photo(data):
     sid  = request.sid
     sess = get_session(sid)
+    if sess.is_guest:
+        ok, msg = _guest_scan_allowed(sess)
+        if not ok:
+            emit("status", {"capturing": False, "processing": False, "msg": msg, "guest_limit": True})
+            _emit_guest_state(sess)
+            return
     emit("status", {"capturing": True, "msg": "Processing photo..."})
     try:
         img_np = decode_b64(data["image"])
@@ -2493,7 +2650,7 @@ def on_photo(data):
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         if not _session_ai_ready(sess):
             if _is_google_model_key(sess.llm_model_key):
-                emit("sa_error", {"msg": "Gemini API not configured on server."})
+                emit("sa_error", {"msg": "Quick OCR is not available on the server."})
             else:
                 emit("sa_error", {"msg": "AI service unavailable. Please try again later."})
             emit("status", {"capturing": False, "processing": False, "msg": "AI unavailable"})
@@ -2528,14 +2685,14 @@ def on_photo(data):
     conf    = 0.0
 
     if _session_ai_ready(sess):
-        emit("status", {"capturing": True, "msg": f"Reading code with AI ({sess.llm_model_key})..."})
+        emit("status", {"capturing": True, "msg": f"Reading code with {_model_label(sess.llm_model_key)}..."})
         try:
             b64_data, media_type = _encode_for_vision(img_np)
             vision_text = _vision_ocr(b64_data, media_type, sess.language_hint, session=sess, sid=sid)
         except Exception as ve:
             vision_text = None
             if _is_google_model_key(sess.llm_model_key):
-                emit("status", {"capturing": True, "msg": f"Gemini failed — retrying with Haiku..."})
+                emit("status", {"capturing": True, "msg": f"{_model_label(sess.llm_model_key)} failed — retrying with Standard OCR..."})
             else:
                 emit("status", {"capturing": True, "msg": f"Vision error: {ve} — falling back..."})
         if vision_text:
@@ -2557,12 +2714,12 @@ def on_photo(data):
         return
 
     # ── Enforce plan line cap ─────────────────────────────────────────────
-    max_lines = sess.plan_limits.get("max_lines_scan", 99999)
+    max_lines = _scan_max_lines(sess)
     lines = text.splitlines()
     if len(lines) > max_lines:
         text = "\n".join(lines[:max_lines])
-        emit("status", {"capturing": True,
-                        "msg": f"Truncated to {max_lines} lines (plan limit). Upgrade for more."})
+        trunc_msg = f"Truncated to {max_lines} lines (demo limit)." if sess.is_guest else f"Truncated to {max_lines} lines (plan limit). Upgrade for more."
+        emit("status", {"capturing": True, "msg": trunc_msg})
 
     lang = sess.language_hint if sess.language_hint else detect_language(text)
 
@@ -2575,35 +2732,41 @@ def on_photo(data):
         "heatmap": heatmap if heatmap else None,
     })
 
-    if not ai_used:
+    if not sess.is_guest:
+        if not ai_used:
+            try:
+                text = reconstruct_indentation(text, img_np)
+            except Exception:
+                pass
+            if _session_ai_ready(sess) and lang == "python":
+                try:
+                    ok, err = check_python_syntax(text)
+                    if not ok and err:
+                        raw_lineno = err.split(":")[0].replace("Line ", "").strip()
+                        if raw_lineno.isdigit():
+                            repaired = llm_repair_syntax(text, int(raw_lineno), err, sess)
+                            if repaired != text:
+                                text = repaired
+                                ai_used = True
+                except Exception:
+                    pass
+            if _session_ai_ready(sess) and not ai_used:
+                corrected = llm_correct_code(text, lang, lc if lc else None, sess)
+                if corrected and corrected != text:
+                    text = corrected
+                    ai_used = True
+    elif not ai_used:
         try:
             text = reconstruct_indentation(text, img_np)
         except Exception:
             pass
-        if _session_ai_ready(sess) and lang == "python":
-            try:
-                ok, err = check_python_syntax(text)
-                if not ok and err:
-                    raw_lineno = err.split(":")[0].replace("Line ", "").strip()
-                    if raw_lineno.isdigit():
-                        repaired = llm_repair_syntax(text, int(raw_lineno), err, sess)
-                        if repaired != text:
-                            text = repaired
-                            ai_used = True
-            except Exception:
-                pass
-        if _session_ai_ready(sess) and not ai_used:
-            corrected = llm_correct_code(text, lang, lc if lc else None, sess)
-            if corrected and corrected != text:
-                text = corrected
-                ai_used = True
 
     _JS_LANGS = {"javascript", "typescript", "react", "nestjs", "nextjs"}
     if lang == "python":
         syntax_ok, syntax_err = check_python_syntax(text)
     elif lang in _JS_LANGS:
         syntax_ok, syntax_err = check_js_syntax(text)
-        if not syntax_ok and syntax_err and _session_ai_ready(sess):
+        if not sess.is_guest and not syntax_ok and syntax_err and _session_ai_ready(sess):
             repaired = llm_repair_js_syntax(text, syntax_err, lang, sess)
             if repaired and repaired != text:
                 text = repaired
@@ -2634,6 +2797,8 @@ def on_photo(data):
 
     # ── Record usage ─────────────────────────────────────────────────────
     record_scan(sess, is_ai=is_ai_scan and ai_used)
+    if sess.is_guest:
+        _finalize_guest_scan(sess, sid)
 
     _bulk_block_num = None
     if sess.bulk_capture:
@@ -2644,10 +2809,15 @@ def on_photo(data):
         "text": text, "lang": lang, "ai_used": ai_used,
         "syntax_ok": syntax_ok, "syntax_err": syntax_err,
         "plan_usage": plan_usage_payload(sess),
+        "guest_demo": sess.is_guest,
     })
+    done_msg = "Demo scan complete — sign in to copy & save" if sess.is_guest else (
+        f"Photo — Block {_bulk_block_num} saved" if _bulk_block_num else "Photo saved"
+    )
     _status_data = {
         "capturing": False,
-        "msg": (f"Photo — Block {_bulk_block_num} saved" if _bulk_block_num else "Photo saved"),
+        "processing": False,
+        "msg": done_msg,
     }
     if _bulk_block_num is not None:
         _status_data["bulk_block"] = _bulk_block_num
@@ -2739,6 +2909,9 @@ def _frame_worker():
 @socketio.on("set_ai")
 def on_set_ai(data):
     sess = get_session(request.sid)
+    if sess.is_guest and not bool(data.get("enabled", False)):
+        emit("guest_error", {"msg": "AI Vision OCR is required for the demo scan"})
+        return
     sess.ai_enabled = bool(data.get("enabled", False))
     emit("status", {"msg": f"AI {'enabled' if sess.ai_enabled else 'disabled'}"})
 
@@ -2767,6 +2940,8 @@ def on_set_auto_clear(data):
 @socketio.on("set_auto_recapture")
 def on_set_auto_recapture(data):
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     sess.auto_recapture_enabled = bool(data.get("enabled", False))
     if not sess.auto_recapture_enabled:
         _cancel_recapture_timer(sess)
@@ -2778,12 +2953,16 @@ def on_recapture_start_signal():
     """Frontend emits this just before 'start' on a recapture trigger so
     on_start() knows not to wipe the accumulated Supabase file."""
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     sess.next_start_is_recapture = True
 
 
 @socketio.on("set_recapture_interval")
 def on_set_recapture_interval(data):
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     interval = int(data.get("interval", 5))
     if interval in (3, 5, 8, 10, 12, 15, 20):
         sess.auto_recapture_interval = interval
@@ -2792,11 +2971,15 @@ def on_set_recapture_interval(data):
 @socketio.on("set_recapture_separator")
 def on_set_recapture_separator(data):
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     sess.auto_recapture_separator = bool(data.get("enabled", True))
 
 @socketio.on("pause_recapture")
 def on_pause_recapture(data=None):
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     _d = data if isinstance(data, dict) else {}
     remaining = int(_d.get("remaining", sess.recapture_paused_remaining or sess.auto_recapture_interval))
     _cancel_recapture_timer(sess, paused_remaining=remaining)
@@ -2807,6 +2990,8 @@ def on_pause_recapture(data=None):
 def on_resume_recapture(data=None):
     _d = data if isinstance(data, dict) else {}
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     if not sess.auto_recapture_enabled:
         return
     remaining = int(_d.get("remaining", sess.recapture_paused_remaining or sess.auto_recapture_interval))
@@ -2817,12 +3002,14 @@ def on_resume_recapture(data=None):
 @socketio.on("set_model")
 def on_set_model(data):
     sess = get_session(request.sid)
-    key = _normalize_model_key(str((data or {}).get("model", "haiku")))
+    if _guest_only_feature(sess):
+        return
+    key = _normalize_model_key(str((data or {}).get("model", DEFAULT_AI_MODEL_KEY)))
     if key not in AI_MODELS:
         emit("model_error", {"msg": "Unknown model"})
         return
     if key == "sonnet" and not _is_admin(sess) and not sess.plan_limits.get("sonnet_allowed"):
-        emit("model_error", {"msg": "Claude Sonnet requires a Pro plan."})
+        emit("model_error", {"msg": "Precision OCR requires a Pro plan."})
         return
     _, _, err = resolve_ai_model(sess, key)
     if err:
@@ -2842,6 +3029,8 @@ def on_set_model(data):
 @socketio.on("set_bulk")
 def on_set_bulk(data):
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     enabled = bool(data.get("enabled", False))
     if enabled and not sess.bulk_capture:
         sess.bulk_session_number += 1
@@ -2857,6 +3046,8 @@ def on_set_bulk(data):
 @socketio.on("reset_bulk_session")
 def on_reset_bulk_session():
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     sess.bulk_session_blocks = 0
     emit("status", {"msg": "Bulk session reset", "bulk_block": 0})
 
@@ -2864,6 +3055,8 @@ def on_reset_bulk_session():
 @socketio.on("fix_session_file")
 def on_fix_session_file(data=None):
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     _d = data or {}
 
     use_ai    = bool(_d.get("ai_fix", sess.ai_enabled))
@@ -2964,6 +3157,8 @@ def on_fix_session_file(data=None):
 def on_save_result(data=None):
     """Save accumulated scans to Supabase Storage exports folder."""
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     _d   = data or {}
 
     # ── Read accumulated text ─────────────────────────────────────────────
@@ -3053,7 +3248,7 @@ def on_save_result(data=None):
         else:
             # Normal fix
             emit("status", {"capturing": False,
-                            "msg": f"Fixing with Claude {model_key.capitalize()}..."})
+                            "msg": f"Fixing with {_model_label(model_key)}..."})
             tt = {"input": 0, "output": 0, "model": model_name}
             fixed = llm_fix_full_file(text, lang, model_key=model_key,
                                       session=sess, token_tracker=tt)
@@ -3246,6 +3441,8 @@ def _run_instant_answer_from_image(sid: str, img_np):
 @socketio.on("set_instant_answer")
 def on_set_instant_answer(data):
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     sess.instant_answer_mode = bool((data or {}).get("enabled"))
     if sess.instant_answer_mode:
         _sa_sessions.pop(sess.user_id, None) if sess.user_id else None
@@ -3256,6 +3453,8 @@ def on_set_instant_answer(data):
 def on_sa_append(data):
     """Append scanned text to the user's S&A session buffer."""
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     if not sess.user_id:
         emit("sa_error", {"msg": "Not authenticated"})
         return
@@ -3303,6 +3502,8 @@ def on_sa_stop_and_answer():
     """Validate S&A request and start answer generation in a background thread."""
     sid  = request.sid
     sess = get_session(sid)
+    if _guest_only_feature(sess):
+        return
     if sess.instant_answer_mode:
         emit("sa_error", {"msg": "Instant Answer is on — use Photo or Stop to capture. Turn off Instant to use accumulated S&A."})
         return
@@ -3378,6 +3579,8 @@ def _run_sa_answer(sid: str, user_id: str, content: str):
 def on_sa_clear():
     """Clear the user's S&A session buffer."""
     sess = get_session(request.sid)
+    if _guest_only_feature(sess):
+        return
     if sess.user_id:
         _sa_sessions.pop(sess.user_id, None)
     emit("sa_cleared", {})

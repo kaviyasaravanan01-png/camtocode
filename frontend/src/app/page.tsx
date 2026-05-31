@@ -60,7 +60,7 @@ const PLANS = [
       'Top 1,000 lines per scan',
       '1,000 saved files',
       '900K fix token budget',
-      'Claude Sonnet for large files',
+      'Precision OCR for large files',
       'Large files auto-merged into one',
       'No Scan & Answer (add below)',
     ],
@@ -116,7 +116,7 @@ const SA_PLANS = [
       'Everything in Pro, plus:',
       '50 Scan & Answer / day',
       '1,000-line buffer per session',
-      'Claude Sonnet for complex files',
+      'Precision OCR for complex files',
       'AI answers code, MCQs & more',
       'Answer files saved to cloud',
       '1,000 total saved files',
@@ -148,8 +148,8 @@ const HOW_IT_WORKS = [
   },
   {
     step: '03',
-    title: 'Claude Reads It',
-    desc: 'Claude Vision AI extracts every character accurately — handles messy handwriting, glare, and off-angles.',
+    title: 'AI Reads It',
+    desc: 'Our AI Vision OCR extracts every character accurately — handles messy handwriting, glare, and off-angles.',
   },
   {
     step: '04',
@@ -166,8 +166,8 @@ const FEATURES = [
   },
   {
     icon: '🤖',
-    title: 'Claude Vision OCR',
-    desc: 'Powered by Anthropic Claude — far more accurate than traditional Tesseract OCR, especially for dense code.',
+    title: 'AI Vision OCR',
+    desc: 'Purpose-built OCR engines for code — far more accurate than traditional Tesseract OCR, especially for dense snippets.',
   },
   {
     icon: '🧠',
@@ -187,7 +187,7 @@ const FEATURES = [
   {
     icon: '⚡',
     title: 'Real-Time Streaming',
-    desc: 'Results stream token-by-token as Claude processes. No waiting for a full round-trip.',
+    desc: 'Results stream token-by-token as the AI processes. No waiting for a full round-trip.',
   },
   {
     icon: '🔒',
@@ -201,23 +201,23 @@ const FEATURES = [
   },
   {
     icon: '🧠',
-    title: 'Sonnet for Complex Files',
-    desc: 'Pro plan automatically routes large, complex files to Claude Sonnet for higher accuracy.',
+    title: 'Precision OCR for Complex Files',
+    desc: 'Pro plan unlocks Precision OCR — highest accuracy for large, complex files and multi-page captures.',
   },
 ]
 
 const FAQ = [
   {
     q: 'What programming languages does it support?',
-    a: 'Any language visible in a photo — Python, JavaScript, Java, C++, Go, Rust, and more. Claude reads code character-by-character regardless of language.',
+    a: 'Any language visible in a photo — Python, JavaScript, Java, C++, Go, Rust, and more. AI Vision OCR reads code character-by-character regardless of language.',
   },
   {
     q: 'What is the difference between a "scan" and an "AI scan"?',
-    a: 'An AI scan uses Claude Vision (more accurate, costs tokens). A regular scan falls back to Tesseract OCR (offline, fast, less accurate). Both count toward your daily scan limit.',
+    a: 'An AI scan uses AI Vision OCR (Quick, Standard, Smart, or Precision engines — more accurate, uses tokens). A regular scan falls back to Tesseract OCR (offline, fast, less accurate). Both count toward your daily scan limit.',
   },
   {
     q: 'What is AI Fix?',
-    a: 'After scanning, AI Fix sends the raw extracted code back to Claude to repair syntax errors, fix indentation, and correct misread characters — producing clean, runnable code.',
+    a: 'After scanning, AI Fix sends the raw extracted code back to AI to repair syntax errors, fix indentation, and correct misread characters — producing clean, runnable code.',
   },
   {
     q: 'Can I use CamToCode on my phone?',
@@ -258,6 +258,7 @@ function Nav() {
         <a href="#help" style={s.navLink}>Help</a>
       </div>
       <div style={s.navActions}>
+        <Link href="/try" style={s.signInBtn}>Try Free Scan</Link>
         <Link href="/login" style={s.signInBtn}>Sign In</Link>
         <Link href="/login" style={s.getStartedBtn}>Get Started Free</Link>
       </div>
@@ -273,26 +274,26 @@ export default function LandingPage() {
 
       {/* ── Hero ──────────────────────────────────────────────────────────── */}
       <section style={s.hero}>
-        <div style={s.heroBadge}>Powered by Claude Vision AI</div>
+        <div style={s.heroBadge}>Powered by AI Vision OCR</div>
         <h1 style={s.heroTitle}>
           Point your camera at code.<br />
           <span style={s.heroGradient}>Get clean code instantly.</span>
         </h1>
         <p style={s.heroSub}>
-          CamToCode uses Anthropic's Claude Vision to extract code from any photo —
+          CamToCode extracts code from any photo —
           whiteboards, textbooks, monitors, handwritten notes. One tap to scan,
           one click to fix, one button to save.
         </p>
         <div style={s.heroCtas}>
-          <Link href="/login" style={s.ctaPrimary}>Start for Free →</Link>
-          <a href="#how-it-works" style={s.ctaSecondary}>See How It Works</a>
+          <Link href="/try" style={s.ctaPrimary}>Try 1 Free Scan →</Link>
+          <Link href="/login" style={s.ctaSecondary}>Sign in for Free Tier</Link>
         </div>
         <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
           <InstallAppButton variant="landing" />
           <ShareButtons />
         </div>
         <div style={s.heroStats}>
-          <div style={s.heroStat}><span style={s.heroStatNum}>Claude</span><span style={s.heroStatLabel}>Vision AI</span></div>
+          <div style={s.heroStat}><span style={s.heroStatNum}>4 OCR</span><span style={s.heroStatLabel}>Engines</span></div>
           <div style={s.heroStatDivider} />
           <div style={s.heroStat}><span style={s.heroStatNum}>Any Language</span><span style={s.heroStatLabel}>Supported</span></div>
           <div style={s.heroStatDivider} />
@@ -601,7 +602,7 @@ export default function LandingPage() {
             <Link href="/terms"   style={s.footerCopy}>Terms</Link>
             <Link href="/privacy" style={s.footerCopy}>Privacy</Link>
             <Link href="/refund"  style={s.footerCopy}>Refund Policy</Link>
-            <span style={s.footerCopy}>Powered by Anthropic Claude</span>
+            <span style={s.footerCopy}>CamToCode — AI Vision OCR for developers</span>
           </div>
         </div>
       </footer>

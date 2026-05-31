@@ -30,10 +30,16 @@ export async function proxy(request: NextRequest) {
 
   // Protect /app and /history — redirect to login if not authenticated
   if (!user && (request.nextUrl.pathname.startsWith('/app') || request.nextUrl.pathname.startsWith('/history'))) {
-    return NextResponse.redirect(new URL('/', request.url))
+    return NextResponse.redirect(new URL('/login?redirect=/app', request.url))
   }
 
   // Redirect authenticated users away from login page
+  if (user && request.nextUrl.pathname === '/login') {
+    const redirect = request.nextUrl.searchParams.get('redirect') || '/app'
+    return NextResponse.redirect(new URL(redirect, request.url))
+  }
+
+  // Redirect authenticated users from landing to app (not from /try demo)
   if (user && request.nextUrl.pathname === '/') {
     return NextResponse.redirect(new URL('/app', request.url))
   }
@@ -42,5 +48,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/', '/app', '/app/:path*', '/history', '/history/:path*', '/auth/callback'],
+  matcher: ['/', '/try', '/try/:path*', '/login', '/app', '/app/:path*', '/history', '/history/:path*', '/auth/callback'],
 }

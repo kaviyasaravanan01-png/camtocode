@@ -34,14 +34,15 @@ export default function TermsPage() {
 
         <h2 style={s.h2}>2. Description of Service</h2>
         <p style={s.p}>
-          CamToCode is a software-as-a-service (SaaS) platform that uses AI Vision technology
-          (Anthropic Claude) to extract, fix, and store code from photographs or camera captures.
+          CamToCode is a software-as-a-service (SaaS) platform that uses AI Vision OCR
+          (Quick, Standard, Smart, and Precision engines) to extract, fix, and store code from photographs or camera captures.
+          Processing may use third-party AI providers as described in our Privacy Policy.
           The Service is provided on a subscription basis with the following plans:
         </p>
         <ul style={s.ul}>
           <li style={s.li}><strong>Free</strong> — Limited scans per day, no AI Fix, 10 saved files.</li>
           <li style={s.li}><strong>Starter (₹599/month ≈ $7 USD)</strong> — 200 AI scans/day, 15 AI Fixes/month, 500 saved files.</li>
-          <li style={s.li}><strong>Pro (₹1,499/month ≈ $18 USD)</strong> — 500 AI scans/day, 75 AI Fixes/month, 1,000 saved files, Claude Sonnet access.</li>
+          <li style={s.li}><strong>Pro (₹1,499/month ≈ $18 USD)</strong> — 500 AI scans/day, 75 AI Fixes/month, 1,000 saved files, Precision OCR access.</li>
         </ul>
 
         <h2 style={s.h2}>3. User Accounts</h2>

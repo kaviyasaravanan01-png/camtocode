@@ -58,6 +58,7 @@ SUPABASE_URL=https://your-project-id.supabase.co
 SUPABASE_SERVICE_KEY=eyJhbGci...  (service_role key)
 SUPABASE_JWT_SECRET=your-jwt-secret
 ANTHROPIC_API_KEY=sk-ant-api03-...
+GOOGLE_API_KEY=AIza...   (required for Quick OCR & Smart OCR — default scan engine)
 FRONTEND_URL=https://your-app.vercel.app   (set after Vercel deploy)
 SECRET_KEY=your-random-secret-string
 PORT=5000
@@ -214,8 +215,8 @@ Vercel (Next.js 14)
       ▼
 Railway (Flask + SocketIO)
   - Per-user session state (UserSession class)
-  - Tesseract OCR (server-side)
-  - Claude Vision API (Anthropic)
+  - Tesseract OCR (server-side fallback)
+  - AI Vision OCR engines (Quick / Standard / Smart / Precision)
   - JWT verification (PyJWT)
       │
       ├──► Supabase Storage
@@ -237,7 +238,8 @@ Railway (Flask + SocketIO)
 | `SUPABASE_URL` | Supabase project URL | Yes |
 | `SUPABASE_SERVICE_KEY` | service_role key (secret!) | Yes |
 | `SUPABASE_JWT_SECRET` | JWT secret for token verification | Yes |
-| `ANTHROPIC_API_KEY` | Claude API key | Yes |
+| `ANTHROPIC_API_KEY` | Standard OCR, Precision OCR, AI Fix, fallback | Yes |
+| `GOOGLE_API_KEY` | Quick OCR & Smart OCR (default: Quick OCR) | Yes |
 | `FRONTEND_URL` | Vercel URL for CORS | Yes |
 | `SECRET_KEY` | Flask session secret | Yes |
 | `PORT` | Server port (Railway sets this) | Auto |
@@ -253,6 +255,46 @@ Railway (Flask + SocketIO)
 
 ---
 
+## OCR Engine Tiers (user-facing names)
+
+CamToCode exposes four **OCR engines** in the UI. Internal keys (for API/debug) are shown in parentheses:
+
+| User-facing name | Internal key | Default | Plan notes |
+|------------------|--------------|---------|------------|
+| **Quick OCR** | `gemini_lite` | ✅ Yes (new sessions) | Free+ — fastest, best for clear shots |
+| **Standard OCR** ★ Recommended | `haiku` | — | Free+ — best balance of speed & accuracy |
+| **Smart OCR** | `gemini_flash` | — | Free+ — glare, angles, dense code |
+| **Precision OCR** | `sonnet` | — | **Pro plan only** — large/complex files |
+
+- **Default on load:** Quick OCR (`gemini_lite`). If `GOOGLE_API_KEY` is missing, new sessions fall back to Standard OCR.
+- **Recommended badge:** Standard OCR — shown in the selector tip, not forced as default.
+- **Fallback:** If Quick/Smart OCR fails, the server automatically retries with Standard OCR and notifies the user.
+
+Labels are defined in `backend/main.py` → `AI_MODELS` and mirrored in `frontend/src/lib/ocrModels.ts`.
+
+---
+
+## Guest demo (`/try`)
+
+Visitors can run **one free OCR scan** before signing in.
+
+| Feature | Guest demo | After sign-in (Free tier) |
+|---------|------------|---------------------------|
+| Scans | 1 per device / 24h | 3 AI scans/day, 20 total/day |
+| OCR engine | Quick OCR only | All engines (Quick default, Standard ★ recommended) |
+| Copy / Save | Preview only — sign in required | Full copy, save, history |
+| Re-capture, S&A, Instant | Disabled | Per plan |
+
+**How it works:**
+- Frontend route: `/try` — connects with `?guest=1&guest_fp=<browser-id>` (no JWT).
+- Backend sets `sess.is_guest = True`, forces Quick OCR, skips DB usage recording.
+- Rate limit: IP + fingerprint key in memory (`GUEST_QUOTA_TTL_SECS = 86400`).
+- After login, users get a **fresh** Free plan session (demo scan does not count toward quota).
+
+**Files:** `frontend/src/components/GuestTryApp.tsx`, `frontend/src/app/try/page.tsx`, guest helpers in `backend/main.py`.
+
+---
+
 ## Pricing Estimates
 
 | Service | Free Tier | Paid |
@@ -260,7 +302,8 @@ Railway (Flask + SocketIO)
 | Vercel | 100GB bandwidth/month | $20/month Pro |
 | Railway | $5 credit/month | ~$5-20/month (usage-based) |
 | Supabase | 500MB DB, 1GB storage, 50K MAU | $25/month Pro |
-| Anthropic | None | ~$0.25 per 1M tokens (Haiku) |
+| Google Gemini | Pay-as-you-go | ~$0.10 per 1M tokens (Flash Lite) |
+| Anthropic | None | ~$0.25 per 1M tokens (Standard OCR tier) |
 
 For a small product (< 1000 users), total cost is roughly **$0-30/month**.
 

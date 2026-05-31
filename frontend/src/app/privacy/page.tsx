@@ -65,7 +65,8 @@ export default function PrivacyPage() {
         <p style={s.p}>We use the following third-party services:</p>
         <ul style={s.ul}>
           <li style={s.li}><strong>Supabase</strong> — Authentication and data storage.</li>
-          <li style={s.li}><strong>Anthropic Claude</strong> — AI Vision OCR and AI Fix processing. Images and code are sent to Anthropic's API for processing and are subject to <a href="https://www.anthropic.com/legal/privacy" style={s.link} target="_blank" rel="noreferrer">Anthropic's Privacy Policy</a>.</li>
+          <li style={s.li}><strong>Anthropic</strong> — Standard OCR, Precision OCR, and AI Fix processing. Subject to <a href="https://www.anthropic.com/legal/privacy" style={s.link} target="_blank" rel="noreferrer">Anthropic's Privacy Policy</a>.</li>
+          <li style={s.li}><strong>Google Gemini</strong> — Quick OCR and Smart OCR processing. Images may be sent to Google's API. Subject to <a href="https://policies.google.com/privacy" style={s.link} target="_blank" rel="noreferrer">Google's Privacy Policy</a>.</li>
           <li style={s.li}><strong>Razorpay</strong> — Payment processing. Subject to <a href="https://razorpay.com/privacy/" style={s.link} target="_blank" rel="noreferrer">Razorpay's Privacy Policy</a>.</li>
           <li style={s.li}><strong>Google</strong> — OAuth sign-in. Subject to <a href="https://policies.google.com/privacy" style={s.link} target="_blank" rel="noreferrer">Google's Privacy Policy</a>.</li>
         </ul>

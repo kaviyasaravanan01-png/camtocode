@@ -1,5 +1,7 @@
 'use client'
 
+import { ocrModelLabel } from '@/lib/ocrModels'
+
 export interface AiModelOption {
   key: string
   label: string
@@ -16,15 +18,7 @@ interface Props {
   onChange: (key: string) => void
 }
 
-const SHORT: Record<string, string> = {
-  haiku: 'Haiku ★',
-  sonnet: 'Sonnet',
-  gemini_lite: 'Gemini Lite',
-  gemini_flash: 'Gemini Flash',
-  gemini: 'Gemini Flash',
-}
-
-function isGeminiKey(key: string) {
+function isGoogleOcrKey(key: string) {
   return key === 'gemini' || key === 'gemini_lite' || key === 'gemini_flash'
 }
 
@@ -37,13 +31,13 @@ export default function AIModelSelector({
 }: Props) {
   const isDisabled = (key: string) => {
     if (key === 'sonnet' && !sonnetAllowed) return 'Pro plan required'
-    if (isGeminiKey(key) && !geminiAvailable) return 'Not configured'
+    if (isGoogleOcrKey(key) && !geminiAvailable) return 'Not configured'
     return ''
   }
 
   return (
     <div className="ctc-model-row">
-      <label className="ctc-model-label" htmlFor="ctc-ai-model">AI Model</label>
+      <label className="ctc-model-label" htmlFor="ctc-ai-model">OCR Engine</label>
       <select
         id="ctc-ai-model"
         className="ctc-model-select-input"
@@ -54,7 +48,7 @@ export default function AIModelSelector({
           const reason = isDisabled(m.key)
           return (
             <option key={m.key} value={m.key} disabled={!!reason}>
-              {SHORT[m.key] || m.label}
+              {ocrModelLabel(m.key, m.recommended)}
               {reason ? ` (${reason})` : ''}
             </option>
           )

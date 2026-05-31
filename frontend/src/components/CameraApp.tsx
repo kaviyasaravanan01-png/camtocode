@@ -4,6 +4,7 @@ import { io, Socket } from 'socket.io-client'
 import { createClient } from '@/lib/supabase'
 import UsageAccordion from './UsageAccordion'
 import AIModelSelector, { type AiModelOption } from './AIModelSelector'
+import { DEFAULT_OCR_MODEL_KEY, DEFAULT_OCR_MODELS, ocrModelLabel } from '@/lib/ocrModels'
 import { type PlanUsage } from './UsageBadge'
 import InstallAppButton from './InstallAppButton'
 
@@ -111,11 +112,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
   const [nightMode,    setNightMode]    = useState(false)
   const [autoCapture,  setAutoCapture]  = useState(false)
   const [autoClear,    setAutoClear]    = useState(false)
-  const [llmModel,     setLlmModel]     = useState('haiku')
+  const [llmModel,     setLlmModel]     = useState(DEFAULT_OCR_MODEL_KEY)
   const [aiModels,     setAiModels]     = useState<AiModelOption[]>([])
   const [geminiAvailable, setGeminiAvailable] = useState(false)
-  const [modelTip,     setModelTip]     = useState('Recommended — best balance of speed, accuracy & cost')
-  const [modelLabel,   setModelLabel]   = useState('Claude Haiku')
+  const [modelTip,     setModelTip]     = useState('Fastest reads — great for clear screenshots and short snippets')
+  const [modelLabel,   setModelLabel]   = useState('Quick OCR')
   const [fallbackNotice, setFallbackNotice] = useState('')
   const [modeDetailsOpen, setModeDetailsOpen] = useState(false)
   const [bulkCapture,  setBulkCapture]  = useState(false)
@@ -501,11 +502,11 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       sock.on('init_state', (d: any) => {
         setAiEnabled(d.ai_enabled); setNightMode(d.night_mode)
         setAutoCapture(d.auto_capture); setAutoClear(d.auto_clear_after_export)
-        setLlmModel(d.llm_model || 'haiku'); setBulkCapture(d.bulk_capture)
+        setLlmModel(d.llm_model || DEFAULT_OCR_MODEL_KEY); setBulkCapture(d.bulk_capture)
         setBulkBlocks(d.bulk_session_blocks); setBulkSession(d.bulk_session_number)
         if (Array.isArray(d.ai_models)) setAiModels(d.ai_models)
         if (d.gemini_available !== undefined) setGeminiAvailable(d.gemini_available)
-        const initModel = (d.ai_models as AiModelOption[] | undefined)?.find(m => m.key === (d.llm_model || 'haiku'))
+        const initModel = (d.ai_models as AiModelOption[] | undefined)?.find(m => m.key === (d.llm_model || DEFAULT_OCR_MODEL_KEY))
         if (initModel) {
           setModelTip(initModel.tip)
           setModelLabel(initModel.label)
@@ -854,13 +855,8 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       desc: 'Point at a question or MCQ, then capture once for an instant answer',
     },
   }[scanMode]
-  const defaultAiModels: AiModelOption[] = [
-    { key: 'haiku', label: 'Claude Haiku', tip: 'Recommended — best balance of speed, accuracy & cost', recommended: true, provider: 'anthropic' },
-    { key: 'sonnet', label: 'Claude Sonnet', tip: 'Highest accuracy for large or complex files (Pro plan)', recommended: false, provider: 'anthropic' },
-    { key: 'gemini_lite', label: 'Gemini 2.5 Flash Lite', tip: 'Fastest & cheapest — great for simple scans and MCQs', recommended: false, provider: 'google' },
-    { key: 'gemini_flash', label: 'Gemini 2.5 Flash', tip: 'Balanced Gemini model — good accuracy at low cost', recommended: false, provider: 'google' },
-  ]
-  const isGeminiKey = (k: string) => k === 'gemini' || k === 'gemini_lite' || k === 'gemini_flash'
+  const defaultAiModels: AiModelOption[] = [...DEFAULT_OCR_MODELS]
+  const isGoogleOcrKey = (k: string) => k === 'gemini' || k === 'gemini_lite' || k === 'gemini_flash'
 
   const handleAutoRecaptureToggle = () => {
     const n = !autoRecapture
@@ -1042,7 +1038,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             </select>
           </div>
           {([
-            ['Claude AI OCR', aiEnabled,   handleAiToggle],
+            ['AI Vision OCR', aiEnabled,   handleAiToggle],
             ['Night Mode',    nightMode,   handleNightToggle],
             ['Auto Capture',  autoCapture, handleAutoToggle],
             ['Auto Clear',       autoClear,         handleAutoClearToggle],
@@ -1099,15 +1095,15 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             </div>
           )}
           <div style={s.row}>
-            <span>AI Model</span>
+            <span>OCR Engine</span>
             <select value={llmModel} onChange={e => handleModelChange(e.target.value)} style={s.select}>
               {(aiModels.length ? aiModels : defaultAiModels).map(m => {
                 const sonnetBlocked = m.key === 'sonnet' && !planUsage?.sonnet_allowed
-                const geminiBlocked = isGeminiKey(m.key) && !geminiAvailable
+                const googleBlocked = isGoogleOcrKey(m.key) && !geminiAvailable
                 return (
-                  <option key={m.key} value={m.key} disabled={sonnetBlocked || geminiBlocked}>
-                    {m.label}{m.recommended ? ' ★ Recommended' : ''}
-                    {sonnetBlocked ? ' (Pro)' : geminiBlocked ? ' (not configured)' : ''}
+                  <option key={m.key} value={m.key} disabled={sonnetBlocked || googleBlocked}>
+                    {ocrModelLabel(m.key, m.recommended)}
+                    {sonnetBlocked ? ' (Pro)' : googleBlocked ? ' (not configured)' : ''}
                   </option>
                 )
               })}
@@ -1596,7 +1592,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             />
             <div style={s.row}>
               <span style={{ fontSize: '0.85rem', color: planUsage?.ai_fix_allowed === false ? 'rgba(255,255,255,0.35)' : undefined }}>
-                AI Fix with Claude
+                AI Fix
                 {planUsage?.ai_fix_allowed === false && (
                   <span style={{ fontSize: '0.72rem', color: '#f59e0b', marginLeft: 8 }}>
                     — <a href="/account" style={{ color: '#818cf8', textDecoration: 'none' }}>Upgrade to unlock</a>
@@ -1623,10 +1619,10 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
               <div style={{ ...s.row, marginTop: 8 }}>
                 <span style={{ fontSize: '0.85rem' }}>Model</span>
                 <select value={saveModel} onChange={e => setSaveModel(e.target.value)} style={s.select}>
-                  <option value="haiku">Haiku (Recommended)</option>
-                  <option value="sonnet" disabled={!planUsage?.sonnet_allowed}>Sonnet (Best)</option>
-                  <option value="gemini_lite" disabled={!geminiAvailable}>Gemini 2.5 Flash Lite</option>
-                  <option value="gemini_flash" disabled={!geminiAvailable}>Gemini 2.5 Flash</option>
+                  <option value="gemini_lite" disabled={!geminiAvailable}>{ocrModelLabel('gemini_lite')}</option>
+                  <option value="haiku">{ocrModelLabel('haiku', true)}</option>
+                  <option value="sonnet" disabled={!planUsage?.sonnet_allowed}>{ocrModelLabel('sonnet')} (Pro)</option>
+                  <option value="gemini_flash" disabled={!geminiAvailable}>{ocrModelLabel('gemini_flash')}</option>
                 </select>
               </div>
             )}
@@ -1700,16 +1696,16 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
             <div style={s.row}>
               <span>Model</span>
               <select value={exportModel} onChange={e => setExportModel(e.target.value)} style={s.select}>
-                <option value="haiku">Haiku (Recommended)</option>
-                <option value="sonnet" disabled={!planUsage?.sonnet_allowed}>Sonnet (Best)</option>
-                <option value="gemini_lite" disabled={!geminiAvailable}>Gemini 2.5 Flash Lite</option>
-                <option value="gemini_flash" disabled={!geminiAvailable}>Gemini 2.5 Flash</option>
+                <option value="gemini_lite" disabled={!geminiAvailable}>{ocrModelLabel('gemini_lite')}</option>
+                <option value="haiku">{ocrModelLabel('haiku', true)}</option>
+                <option value="sonnet" disabled={!planUsage?.sonnet_allowed}>{ocrModelLabel('sonnet')} (Pro)</option>
+                <option value="gemini_flash" disabled={!geminiAvailable}>{ocrModelLabel('gemini_flash')}</option>
               </select>
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: '1rem' }}>
               <button onClick={() => setShowExport(false)} style={s.cancelBtn} disabled={exporting}>Cancel</button>
               <button onClick={handleExportSubmit} style={s.exportBtn} disabled={exporting}>
-                {exporting ? 'Exporting...' : 'Export & Fix with Claude'}
+                {exporting ? 'Exporting...' : 'Export & Fix with AI'}
               </button>
             </div>
           </div>

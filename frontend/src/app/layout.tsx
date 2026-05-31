@@ -7,7 +7,7 @@ const keywords = [
   'photo to code',
   'scan code from screen',
   'OCR code scanner',
-  'Claude Vision OCR',
+  'AI Vision OCR',
   'whiteboard to code',
   'screenshot to python',
   'MCQ scanner',
@@ -52,7 +52,7 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: `${SITE_NAME} — Camera to Code with Claude AI`,
+    title: `${SITE_NAME} — Camera to Code with AI Vision OCR`,
     description: SITE_TAGLINE,
     images: ['/icons/icon.svg'],
   },
@@ -120,7 +120,7 @@ const jsonLd = {
       },
       description: SITE_TAGLINE,
       featureList: [
-        'Claude Vision code OCR',
+        'AI Vision code OCR',
         'AI Fix syntax repair',
         'Scan and Answer for MCQs',
         'Instant Answer mode',
