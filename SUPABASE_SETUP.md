@@ -191,18 +191,23 @@ If you already have the `daily_usage` table, run this migration to add S&A track
 -- Add scan_answers column to daily_usage (if table already exists)
 ALTER TABLE public.daily_usage
   ADD COLUMN IF NOT EXISTS scan_answers integer NOT NULL DEFAULT 0;
+
+-- Instant Answer daily counter (separate from accumulated S&A)
+ALTER TABLE public.daily_usage
+  ADD COLUMN IF NOT EXISTS instant_answers integer NOT NULL DEFAULT 0;
 ```
 
 If creating `daily_usage` from scratch, include it from the start:
 
 ```sql
 CREATE TABLE IF NOT EXISTS public.daily_usage (
-    id           bigserial PRIMARY KEY,
-    user_id      uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-    date         date NOT NULL,
-    scans        integer NOT NULL DEFAULT 0,
-    ai_scans     integer NOT NULL DEFAULT 0,
-    scan_answers integer NOT NULL DEFAULT 0,
+    id               bigserial PRIMARY KEY,
+    user_id          uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    date             date NOT NULL,
+    scans            integer NOT NULL DEFAULT 0,
+    ai_scans         integer NOT NULL DEFAULT 0,
+    scan_answers     integer NOT NULL DEFAULT 0,
+    instant_answers  integer NOT NULL DEFAULT 0,
     UNIQUE (user_id, date)
 );
 

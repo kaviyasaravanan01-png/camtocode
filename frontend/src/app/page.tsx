@@ -20,6 +20,7 @@ const PLANS = [
       'Top 100 lines per scan',
       '10 saved files',
       'Tesseract fallback OCR',
+      '5 Instant Answers / day',
       '1 Scan & Answer / day (10-line limit)',
       'No AI Fix (upgrade to unlock)',
     ],
@@ -229,7 +230,7 @@ const FAQ = [
   },
   {
     q: 'What is Scan & Answer?',
-    a: 'Scan & Answer lets you scan multiple pieces of content (MCQs, incomplete code, problems) and then ask the AI to answer everything at once. The answer is saved as a Markdown file you can open and download. Free users get 1/day with a 10-line limit. Paid S&A plans get 20–50/day.',
+    a: 'Scan & Answer lets you scan multiple pieces of content (MCQs, incomplete code, problems) and then ask the AI to answer everything at once. The answer is saved as a Markdown file you can open and download. Free users get 5 Instant Answers/day and 1 accumulated Scan & Answer/day (10-line buffer). Paid S&A plans get 20–50/day.',
   },
   {
     q: 'Can I buy Scan & Answer without a core scanning plan?',

@@ -25,6 +25,8 @@ export interface PlanUsage {
   scan_answer_day_limit: number
   scan_answer_max_lines: number
   scan_answer_today: number
+  instant_answer_day_limit: number
+  instant_answer_today: number
 }
 
 const PLAN_COLORS: Record<string, string> = {
@@ -154,13 +156,27 @@ export default function UsageBadge({ usage, compact = false }: { usage: PlanUsag
         </>
       )}
 
+      {/* Instant Answer usage */}
+      {usage.instant_answer_day_limit > 0 && (
+        <>
+          <div style={s.row}>
+            <span style={s.label}>Instant today</span>
+            <span style={s.val}>{usage.instant_answer_today} / {usage.instant_answer_day_limit}</span>
+          </div>
+          <Bar used={usage.instant_answer_today} limit={usage.instant_answer_day_limit} color="#eab308" />
+        </>
+      )}
+
       {/* Plan notes */}
       <div style={s.notes}>
         {!usage.ai_fix_allowed && <span style={s.note}>❌ AI Fix — upgrade to Starter</span>}
-        {usage.scan_answer_day_limit === 0 && <span style={s.note}>❌ Scan & Answer — add S&A plan</span>}
+        {usage.scan_answer_day_limit === 0 && usage.instant_answer_day_limit === 0 && (
+          <span style={s.note}>❌ Scan & Answer — add S&A plan</span>
+        )}
         {usage.max_lines_scan < 9999 && <span style={s.note}>✂ Top {usage.max_lines_scan} lines per scan</span>}
         {usage.sonnet_allowed && <span style={s.note}>✅ Precision OCR for large files</span>}
         {usage.scan_answer_day_limit > 0 && <span style={s.note}>✅ Scan & Answer ({usage.scan_answer_max_lines} lines)</span>}
+        {usage.instant_answer_day_limit > 0 && <span style={s.note}>⚡ Instant Answer ({usage.instant_answer_day_limit}/day)</span>}
       </div>
 
       {/* Proactive upgrade link for non-pro users */}

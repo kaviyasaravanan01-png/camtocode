@@ -95,7 +95,8 @@ PLANS: dict[str, dict] = {
         "sonnet_budget":          0,
         "save_allowed":        True,
         "max_files":             10,
-        "scan_answer_day":        1,   # 1 Scan & Answer per day
+        "instant_answer_day":     5,   # Instant Answer per day (separate from S&A)
+        "scan_answer_day":        1,   # Scan & Answer (accumulated) per day
         "scan_answer_max_lines": 10,   # max 10 lines in buffer
     },
     # ── Starter ($7/month, no Scan & Answer) ─────────────────────────────
@@ -113,6 +114,7 @@ PLANS: dict[str, dict] = {
         "sonnet_budget":          0,
         "save_allowed":        True,
         "max_files":            500,
+        "instant_answer_day":       0,
         "scan_answer_day":        0,   # not included — upgrade to starter_sa
         "scan_answer_max_lines":  0,
     },
@@ -131,6 +133,7 @@ PLANS: dict[str, dict] = {
         "sonnet_budget":     500_000,
         "save_allowed":        True,
         "max_files":           1000,
+        "instant_answer_day":       0,
         "scan_answer_day":        0,   # not included — upgrade to pro_sa
         "scan_answer_max_lines":  0,
     },
@@ -149,6 +152,7 @@ PLANS: dict[str, dict] = {
         "sonnet_budget":          0,
         "save_allowed":        True,
         "max_files":            500,
+        "instant_answer_day":      20,
         "scan_answer_day":       20,   # 20 S&A answers per day
         "scan_answer_max_lines": 300,  # max 300 lines in S&A buffer
     },
@@ -167,6 +171,7 @@ PLANS: dict[str, dict] = {
         "sonnet_budget":     500_000,
         "save_allowed":        True,
         "max_files":           1000,
+        "instant_answer_day":      50,
         "scan_answer_day":       50,   # 50 S&A answers per day
         "scan_answer_max_lines":1000,  # max 1 000 lines in S&A buffer
     },
@@ -185,6 +190,7 @@ PLANS: dict[str, dict] = {
         "sonnet_budget":          0,
         "save_allowed":        True,
         "max_files":            100,
+        "instant_answer_day":      20,
         "scan_answer_day":       20,   # 20 S&A answers per day
         "scan_answer_max_lines": 200,
     },
@@ -204,6 +210,7 @@ PLANS: dict[str, dict] = {
         "save_allowed":        True,
         "max_files":        999_999,
         "scan_answer_day":  999_999,
+        "instant_answer_day": 999_999,
         "scan_answer_max_lines": 999_999,
     },
 }
@@ -582,6 +589,7 @@ class UserSession:
         self.usage_month_ai_fixes       = 0
         self.usage_files_saved          = 0
         self.usage_today_sa             = 0
+        self.usage_today_instant        = 0
         self.usage_loaded_at            = 0.0   # epoch when cache was last refreshed
         self.plan_started_at: str | None = None  # ISO timestamp when current plan started
         self.plan_expires_at: str | None = None  # ISO timestamp when plan expires (None = never)
@@ -1115,6 +1123,28 @@ def db_inc_sa_daily(user_id: str) -> None:
     except Exception:
         pass
 
+def db_inc_instant_daily(user_id: str) -> None:
+    """Increment instant_answers counter in daily_usage (get-then-upsert)."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY or not user_id:
+        return
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    try:
+        resp = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/daily_usage?user_id=eq.{user_id}&date=eq.{date_str}&select=instant_answers",
+            headers=_rest_hdr(), timeout=5,
+        )
+        current = 0
+        if resp.status_code == 200 and resp.json():
+            current = resp.json()[0].get("instant_answers", 0) or 0
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/daily_usage",
+            json={"user_id": user_id, "date": date_str, "instant_answers": current + 1},
+            headers={**_rest_hdr(), "Prefer": "resolution=merge-duplicates"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
 def db_reset_usage_on_expiry(user_id: str) -> None:
     """Reset scan/fix counters when a paid plan expires and downgrades to free.
     Deletes the daily row (so reads return 0) and zeroes monthly scan/fix
@@ -1199,6 +1229,7 @@ def load_user_plan_usage(sess: "UserSession") -> None:
     sess.usage_today_scans          = daily.get("scans",            0)
     sess.usage_today_ai_scans       = daily.get("ai_scans",         0)
     sess.usage_today_sa             = daily.get("scan_answers",     0)
+    sess.usage_today_instant        = daily.get("instant_answers", 0)
     sess.usage_month_scans          = monthly.get("scans",           0)
     sess.usage_month_haiku_fix_tok  = monthly.get("haiku_fix_tokens",0)
     sess.usage_month_sonnet_fix_tok = monthly.get("sonnet_fix_tokens",0)
@@ -1349,6 +1380,8 @@ def plan_usage_payload(sess: "UserSession") -> dict:
         "scan_answer_day_limit":  lim.get("scan_answer_day", 0),
         "scan_answer_max_lines":  lim.get("scan_answer_max_lines", 0),
         "scan_answer_today":      sess.usage_today_sa,
+        "instant_answer_day_limit": lim.get("instant_answer_day", 0),
+        "instant_answer_today":   sess.usage_today_instant,
     }
 
 # ---------------------------------------------------------------------------
@@ -2642,7 +2675,7 @@ def on_photo(data):
         if sess._sa_answering:
             emit("sa_status", {"msg": "Already generating an answer..."})
             return
-        ok, err = _check_sa_answer_allowed(sess)
+        ok, err = _check_instant_answer_allowed(sess)
         if not ok:
             emit("sa_error", {"msg": err})
             emit("status", {"capturing": False, "processing": False, "msg": err})
@@ -3350,8 +3383,23 @@ _SA_TEXT_ANSWER_PROMPT_HEAD = (
 )
 
 
+def _check_instant_answer_allowed(sess) -> tuple[bool, str]:
+    """Return (ok, error_message) for Instant Answer usage."""
+    if not sess.user_id:
+        return False, "Not authenticated"
+    if _is_admin(sess):
+        return True, ""
+    lim = sess.plan_limits
+    limit = lim.get("instant_answer_day", 0)
+    if limit == 0:
+        return False, "Instant Answer is not included in your plan. Upgrade to a plan with Instant Answer."
+    if sess.usage_today_instant >= limit:
+        return False, f"Daily Instant Answer limit ({limit}/day) reached. Resets at midnight."
+    return True, ""
+
+
 def _check_sa_answer_allowed(sess) -> tuple[bool, str]:
-    """Return (ok, error_message) for S&A / Instant Answer usage."""
+    """Return (ok, error_message) for accumulated Scan & Answer usage."""
     if not sess.user_id:
         return False, "Not authenticated"
     lim = sess.plan_limits
@@ -3377,8 +3425,12 @@ def _save_and_emit_sa_done(sid: str, sess, user_id: str, answer_text: str, sourc
         if ok:
             download_url = supabase_signed_url(storage_path, expires_in=86400)
 
-    sess.usage_today_sa += 1
-    db_inc_sa_daily(user_id)
+    if source == "instant":
+        sess.usage_today_instant += 1
+        db_inc_instant_daily(user_id)
+    else:
+        sess.usage_today_sa += 1
+        db_inc_sa_daily(user_id)
     _sa_sessions.pop(user_id, None)
 
     _emit_to(sid, "sa_done", {
@@ -3409,7 +3461,7 @@ def _run_instant_answer_from_image(sid: str, img_np):
     sess = get_session(sid)
     user_id = sess.user_id
     try:
-        ok, err = _check_sa_answer_allowed(sess)
+        ok, err = _check_instant_answer_allowed(sess)
         if not ok:
             _emit_to(sid, "sa_error", {"msg": err})
             return
@@ -3841,6 +3893,8 @@ def my_plan():
         "scan_answer_day_limit":  lim.get("scan_answer_day", 0),
         "scan_answer_max_lines":  lim.get("scan_answer_max_lines", 0),
         "scan_answer_today":      daily.get("scan_answers", 0),
+        "instant_answer_day_limit": lim.get("instant_answer_day", 0),
+        "instant_answer_today":   daily.get("instant_answers", 0),
     })
 
 

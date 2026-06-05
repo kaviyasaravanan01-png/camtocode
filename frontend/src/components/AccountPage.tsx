@@ -51,6 +51,8 @@ interface PlanData {
   scan_answer_day_limit: number
   scan_answer_max_lines: number
   scan_answer_today: number
+  instant_answer_day_limit: number
+  instant_answer_today: number
 }
 
 interface Payment {
@@ -244,6 +246,9 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
                 {data.scan_answer_day_limit > 0 && (
                   <StatRow label="Scan & Answer today" used={data.scan_answer_today} limit={data.scan_answer_day_limit} color="#10b981" />
                 )}
+                {data.instant_answer_day_limit > 0 && (
+                  <StatRow label="Instant Answer today" used={data.instant_answer_today} limit={data.instant_answer_day_limit} color="#eab308" />
+                )}
               </div>
 
               {/* Token detail */}
@@ -266,6 +271,9 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
                   ? <span style={{ ...s.noteItem, color: '#34d399' }}>🧠 Scan & Answer: {data.scan_answer_max_lines}-line buffer</span>
                   : <span style={{ ...s.noteItem, color: '#f87171' }}>❌ Scan & Answer — add S&A plan to unlock</span>
                 }
+                {data.instant_answer_day_limit > 0 && (
+                  <span style={{ ...s.noteItem, color: '#fde047' }}>⚡ Instant Answer: {data.instant_answer_day_limit}/day</span>
+                )}
               </div>
             </section>
           )}
