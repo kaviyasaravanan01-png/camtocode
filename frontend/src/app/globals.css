@@ -605,6 +605,38 @@ code, pre {
   background: #0a0a0a;
 }
 
+/* Hide all chrome in fullscreen — code only */
+.ctc-scroll-reader--fs .ctc-scroll-chrome {
+  display: none !important;
+}
+
+.ctc-scroll-reader--fs .ctc-scroll-viewport {
+  flex: 1;
+  height: 100%;
+}
+
+.ctc-scroll-fs-exit {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 1000;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 1rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.ctc-scroll-reader--fs:hover .ctc-scroll-fs-exit,
+.ctc-scroll-fs-exit:focus {
+  opacity: 0.85;
+}
+
 .ctc-scroll-header {
   display: flex;
   align-items: center;
@@ -728,13 +760,21 @@ code, pre {
 }
 
 .ctc-scroll-settings-grid select,
-.ctc-scroll-settings-grid input[type='number'] {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+.ctc-scroll-settings-grid input[type='number'],
+.ctc-scroll-select {
+  background: #141428;
+  border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 6px;
-  color: inherit;
-  padding: 0.25rem 0.4rem;
+  color: #e2e8f0;
+  padding: 0.35rem 0.5rem;
   font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.ctc-scroll-settings-grid select option,
+.ctc-scroll-select option {
+  background: #141428;
+  color: #e2e8f0;
 }
 
 .ctc-scroll-check {
@@ -791,6 +831,7 @@ code, pre {
   overflow: auto;
   min-height: 0;
   position: relative;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ctc-scroll-line-probe {

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import AppNavMenu from '@/components/AppNavMenu'
 import { guestNavItems } from '@/lib/appNav'
@@ -34,6 +34,7 @@ export default function ScrollReader() {
   const rootRef = useRef<HTMLDivElement>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const programmaticScrollRef = useRef(false)
 
   useEffect(() => {
     setSettings(loadScrollSettings())
@@ -48,26 +49,31 @@ export default function ScrollReader() {
     (patch: Partial<ScrollReaderSettings>) => {
       persistSettings({ ...settings, ...patch })
     },
-    [settings, persistSettings]
+    [settings, persistSettings],
   )
 
   const totalLines = lines.length
   const endLine = totalLines === 0 ? 0 : Math.min(startLine + visibleLines, totalLines)
   const linesRemaining = Math.max(0, totalLines - startLine)
   const stepSize = settings.autoDetectLines ? visibleLines : Math.max(1, settings.linesPerStep)
+  const effectiveFontSize = Math.round(settings.fontSize * ((settings.zoomPercent ?? 100) / 100))
+
+  const getLineHeight = useCallback(() => lineProbeRef.current?.offsetHeight ?? 0, [])
+
+  const readStartLineFromScroll = useCallback(() => {
+    const vp = viewportRef.current
+    const lh = getLineHeight()
+    if (!vp || lh <= 0) return startLine
+    return Math.max(0, Math.min(totalLines - 1, Math.round(vp.scrollTop / lh)))
+  }, [getLineHeight, startLine, totalLines])
 
   const measureVisibleLines = useCallback(() => {
     const viewport = viewportRef.current
-    const probe = lineProbeRef.current
-    if (!viewport || !probe) return
-    const lh = probe.offsetHeight
-    if (lh <= 0) return
+    const lh = getLineHeight()
+    if (!viewport || lh <= 0) return
     const innerH = viewport.clientHeight - settings.padding * 2
-    const count = Math.max(1, Math.floor(innerH / lh))
-    setVisibleLines(count)
-  }, [settings.padding])
-
-  const effectiveFontSize = Math.round(settings.fontSize * ((settings.zoomPercent ?? 100) / 100))
+    setVisibleLines(Math.max(1, Math.floor(innerH / lh)))
+  }, [getLineHeight, settings.padding])
 
   useLayoutEffect(() => {
     measureVisibleLines()
@@ -91,16 +97,25 @@ export default function ScrollReader() {
   }, [])
 
   const scrollToLine = useCallback((lineIndex: number) => {
+    const vp = viewportRef.current
+    const lh = getLineHeight()
     const clamped = Math.max(0, Math.min(lineIndex, Math.max(0, totalLines - 1)))
     setStartLine(clamped)
-  }, [totalLines])
+    if (!vp || lh <= 0) return
+    programmaticScrollRef.current = true
+    vp.scrollTop = clamped * lh
+    requestAnimationFrame(() => {
+      programmaticScrollRef.current = false
+    })
+  }, [getLineHeight, totalLines])
 
   const advanceSection = useCallback(() => {
     if (totalLines === 0) {
       setStatusMsg('Load a file first.')
       return false
     }
-    const remaining = totalLines - startLine
+    const current = readStartLineFromScroll()
+    const remaining = totalLines - current
     if (remaining <= 0) {
       setStatusMsg('End of file reached.')
       setSessionActive(false)
@@ -108,18 +123,18 @@ export default function ScrollReader() {
       return false
     }
     const step = Math.min(stepSize, remaining)
-    const next = startLine + step
+    const next = current + step
     if (next >= totalLines) {
-      setStatusMsg(`Final section — lines ${startLine + 1}–${totalLines}`)
+      setStatusMsg(`Final section — lines ${current + 1}–${totalLines}`)
       setSessionActive(false)
       stopTimer()
       return false
     }
-    setStartLine(next)
+    scrollToLine(next)
     const shown = Math.min(visibleLines, totalLines - next)
     setStatusMsg(`Showing lines ${next + 1}–${next + shown}`)
     return true
-  }, [totalLines, startLine, stepSize, visibleLines, stopTimer])
+  }, [totalLines, readStartLineFromScroll, stepSize, visibleLines, stopTimer, scrollToLine])
 
   const startTimerLoop = useCallback(() => {
     stopTimer()
@@ -160,6 +175,7 @@ export default function ScrollReader() {
   const terminateSession = useCallback(() => {
     setSessionActive(false)
     setTimerPaused(false)
+    setKeyboardPaused(false)
     stopTimer()
     setStatusMsg('Session stopped.')
   }, [stopTimer])
@@ -185,67 +201,97 @@ export default function ScrollReader() {
       setTimerPaused(true)
       stopTimer()
       setStatusMsg('Timer paused.')
+    } else {
+      setKeyboardPaused(p => {
+        const next = !p
+        setStatusMsg(next ? 'Paused — press S or N when ready.' : 'Resumed.')
+        return next
+      })
     }
   }, [settings.scrollMode, stopTimer])
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName
-      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
-
-      if (settings.scrollMode === 'keyboard') {
-        const k = e.key.toLowerCase()
-        if (k === 's') {
-          e.preventDefault()
-          if (keyboardPaused) {
-            setStatusMsg('Paused — press P to resume first.')
-            return
-          }
-          if (!sessionActive) setSessionActive(true)
-          advanceSection()
-        } else if (k === 'p') {
-          e.preventDefault()
-          setKeyboardPaused(p => {
-            const next = !p
-            setStatusMsg(next ? 'Paused — press S when ready to advance.' : 'Resumed.')
-            return next
-          })
-        } else if (k === 't') {
-          e.preventDefault()
-          terminateSession()
-          setKeyboardPaused(false)
-          scrollToLine(0)
-          setStatusMsg('Session terminated — back to top.')
-        }
+  const handleNextKey = useCallback(() => {
+    if (settings.scrollMode === 'keyboard') {
+      if (keyboardPaused) {
+        setStatusMsg('Paused — press P to resume first.')
+        return
       }
+      if (!sessionActive) setSessionActive(true)
+      advanceSection()
+      return
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [settings.scrollMode, sessionActive, keyboardPaused, advanceSection, handlePause, terminateSession, scrollToLine])
+    // Timer mode: advance + restart countdown from beginning
+    if (!sessionActive) setSessionActive(true)
+    const ok = advanceSection()
+    if (ok !== false && totalLines > 0) {
+      startTimerLoop()
+      setStatusMsg(`Next section — timer restarted (${settings.timerSeconds}s)`)
+    }
+  }, [
+    settings.scrollMode,
+    settings.timerSeconds,
+    keyboardPaused,
+    sessionActive,
+    advanceSection,
+    startTimerLoop,
+    totalLines,
+  ])
 
-  useEffect(() => () => stopTimer(), [stopTimer])
+  const handleTerminateKey = useCallback(() => {
+    terminateSession()
+    scrollToLine(0)
+    setStatusMsg('Session terminated — back to top.')
+  }, [terminateSession, scrollToLine])
 
-  useEffect(() => {
-    const onFs = () => setIsFullscreen(!!document.fullscreenElement)
-    document.addEventListener('fullscreenchange', onFs)
-    return () => document.removeEventListener('fullscreenchange', onFs)
-  }, [])
+  const onViewportScroll = useCallback(() => {
+    if (programmaticScrollRef.current) return
+    const current = readStartLineFromScroll()
+    setStartLine(current)
+  }, [readStartLineFromScroll])
 
-  const toggleFullscreen = async () => {
+  const toggleFullscreen = useCallback(async () => {
     if (!rootRef.current) return
     if (document.fullscreenElement) {
       await document.exitFullscreen()
     } else {
       await rootRef.current.requestFullscreen()
     }
-  }
+  }, [])
 
-  const visibleSlice = useMemo(() => {
-    if (totalLines === 0) return []
-    const windowSize = settings.autoDetectLines ? visibleLines : Math.max(visibleLines, stepSize)
-    const end = Math.min(startLine + windowSize, totalLines)
-    return lines.slice(startLine, end)
-  }, [lines, startLine, visibleLines, totalLines, settings.autoDetectLines, stepSize])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return
+
+      const k = e.key.toLowerCase()
+      if (k === 's' || k === 'n') {
+        e.preventDefault()
+        handleNextKey()
+      } else if (k === 'p') {
+        e.preventDefault()
+        handlePause()
+      } else if (k === 't') {
+        e.preventDefault()
+        handleTerminateKey()
+      } else if (k === 'f' && totalLines > 0) {
+        e.preventDefault()
+        toggleFullscreen()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [handleNextKey, handlePause, handleTerminateKey, totalLines, toggleFullscreen])
+
+  useEffect(() => () => stopTimer(), [stopTimer])
+
+  useEffect(() => {
+    const onFs = () => {
+      setIsFullscreen(!!document.fullscreenElement)
+      if (document.fullscreenElement) setShowSettings(false)
+    }
+    document.addEventListener('fullscreenchange', onFs)
+    return () => document.removeEventListener('fullscreenchange', onFs)
+  }, [])
 
   const adjustZoom = (delta: number) => {
     const next = Math.max(50, Math.min(200, settings.zoomPercent + delta))
@@ -269,6 +315,7 @@ export default function ScrollReader() {
   ]
 
   const navItems = guestNavItems()
+  const lineNumWidth = totalLines > 0 ? String(totalLines).length : 1
 
   return (
     <div
@@ -276,7 +323,7 @@ export default function ScrollReader() {
       className={`ctc-scroll-reader${isFullscreen ? ' ctc-scroll-reader--fs' : ''}`}
       style={{ background: settings.bgColor, color: settings.textColor }}
     >
-      <header className="ctc-scroll-header">
+      <header className="ctc-scroll-header ctc-scroll-chrome">
         <div className="ctc-scroll-header-left">
           <Link href="/" className="ctc-scroll-logo">CamToCode</Link>
           <span className="ctc-scroll-badge">Scroll Automation</span>
@@ -308,8 +355,8 @@ export default function ScrollReader() {
         </div>
       </header>
 
-      {showSettings && (
-        <div className="ctc-scroll-settings">
+      {showSettings && !isFullscreen && (
+        <div className="ctc-scroll-settings ctc-scroll-chrome">
           <div className="ctc-scroll-settings-grid">
             <label>
               Background
@@ -331,7 +378,7 @@ export default function ScrollReader() {
             </label>
             <label>
               Font family
-              <select value={settings.fontFamily} onChange={e => patchSettings({ fontFamily: e.target.value })}>
+              <select className="ctc-scroll-select" value={settings.fontFamily} onChange={e => patchSettings({ fontFamily: e.target.value })}>
                 {FONT_PRESETS.map(f => (
                   <option key={f.label} value={f.value}>{f.label}</option>
                 ))}
@@ -367,9 +414,9 @@ export default function ScrollReader() {
             )}
             <label>
               Scroll mode
-              <select value={settings.scrollMode} onChange={e => patchSettings({ scrollMode: e.target.value as 'timer' | 'keyboard' })}>
-                <option value="keyboard">Keyboard (S / P / T)</option>
-                <option value="timer">Timer (auto)</option>
+              <select className="ctc-scroll-select" value={settings.scrollMode} onChange={e => patchSettings({ scrollMode: e.target.value as 'timer' | 'keyboard' })}>
+                <option value="keyboard">Keyboard (S / N / P / T)</option>
+                <option value="timer">Timer + keys (S / N / P / T)</option>
               </select>
             </label>
             {settings.scrollMode === 'timer' && (
@@ -380,21 +427,25 @@ export default function ScrollReader() {
             )}
           </div>
           <p className="ctc-scroll-settings-hint">
-            Settings are saved in your browser. No data is sent to any server.
+            Settings saved locally. Keys work in both modes: <kbd>S</kbd>/<kbd>N</kbd> next · <kbd>P</kbd> pause · <kbd>T</kbd> stop · <kbd>F</kbd> fullscreen
           </p>
         </div>
       )}
 
-      <div className="ctc-scroll-status-bar">
+      <div className="ctc-scroll-status-bar ctc-scroll-chrome">
         <span>{formatLineRange(startLine, endLine, totalLines)}</span>
         <span>Step: {stepSize} lines{settings.autoDetectLines ? ' (auto)' : ''}</span>
         <span>{linesRemaining > 0 ? `${linesRemaining} lines left` : '—'}</span>
         <span className="ctc-scroll-status-msg">{statusMsg}</span>
       </div>
 
-      {settings.scrollMode === 'keyboard' && (
-        <div className="ctc-scroll-kbd-hint">
-          <strong>Keyboard mode:</strong> click this page once, then <kbd>S</kbd> next section · <kbd>P</kbd> pause · <kbd>T</kbd> stop &amp; reset to top
+      {!isFullscreen && (
+        <div className="ctc-scroll-kbd-hint ctc-scroll-chrome">
+          <strong>{settings.scrollMode === 'timer' ? 'Timer mode' : 'Keyboard mode'}:</strong>{' '}
+          <kbd>S</kbd>/<kbd>N</kbd> next section
+          {settings.scrollMode === 'timer' && ' (restarts timer)'}
+          {' · '}<kbd>P</kbd> pause · <kbd>T</kbd> stop &amp; reset · <kbd>F</kbd> fullscreen
+          {' · '}Mouse wheel scrolls freely
           {sessionActive && <span className="ctc-scroll-session-dot"> Session active</span>}
         </div>
       )}
@@ -403,12 +454,13 @@ export default function ScrollReader() {
         ref={viewportRef}
         className="ctc-scroll-viewport"
         style={{ padding: settings.padding }}
+        onScroll={onViewportScroll}
       >
         <div ref={lineProbeRef} className="ctc-scroll-line-probe" style={lineStyle} aria-hidden>
           probe
         </div>
         {totalLines === 0 ? (
-          <div className="ctc-scroll-empty">
+          <div className="ctc-scroll-empty ctc-scroll-chrome">
             <p style={{ fontSize: '2.5rem', marginBottom: 12 }}>📄</p>
             <p>Open a code file from your computer to display it here.</p>
             <p className="ctc-scroll-empty-sub">Use with CamToCode on your phone — see <Link href="/docs">Docs</Link> for the full workflow.</p>
@@ -418,13 +470,16 @@ export default function ScrollReader() {
           </div>
         ) : (
           <pre className="ctc-scroll-code" style={lineStyle}>
-            {visibleSlice.map((line, i) => {
-              const lineNo = startLine + i + 1
+            {lines.map((line, i) => {
+              const lineNo = i + 1
               return (
                 <div key={lineNo} className="ctc-scroll-line">
                   {settings.showLineNumbers && (
-                    <span className="ctc-scroll-ln" style={{ color: settings.textColor, opacity: 0.45 }}>
-                      {String(lineNo).padStart(String(totalLines).length, ' ')}
+                    <span
+                      className="ctc-scroll-ln"
+                      style={{ color: settings.textColor, opacity: 0.45, minWidth: `${lineNumWidth + 1}ch` }}
+                    >
+                      {String(lineNo).padStart(lineNumWidth, ' ')}
                     </span>
                   )}
                   <span className="ctc-scroll-lt">{line || ' '}</span>
@@ -435,8 +490,8 @@ export default function ScrollReader() {
         )}
       </div>
 
-      {settings.scrollMode === 'timer' && totalLines > 0 && (
-        <footer className="ctc-scroll-footer">
+      {settings.scrollMode === 'timer' && totalLines > 0 && !isFullscreen && (
+        <footer className="ctc-scroll-footer ctc-scroll-chrome">
           {!sessionActive ? (
             <button type="button" className="ctc-scroll-btn ctc-scroll-btn--primary" onClick={handleStartSession}>
               ▶ Start timer
@@ -446,23 +501,36 @@ export default function ScrollReader() {
               <button type="button" className="ctc-scroll-btn" onClick={handlePause} disabled={timerPaused}>
                 ⏸ Pause
               </button>
-              <button type="button" className="ctc-scroll-btn" onClick={() => { terminateSession(); scrollToLine(0) }}>
+              <button type="button" className="ctc-scroll-btn" onClick={handleTerminateKey}>
                 ■ Stop
               </button>
-              <button type="button" className="ctc-scroll-btn" onClick={advanceSection}>
-                Skip to next section
+              <button type="button" className="ctc-scroll-btn" onClick={handleNextKey}>
+                Skip to next (S / N)
               </button>
             </>
           )}
-          <span className="ctc-scroll-footer-hint">Auto-advances every {settings.timerSeconds}s · last chunk shows only remaining lines</span>
+          <span className="ctc-scroll-footer-hint">
+            Auto-advances every {settings.timerSeconds}s · <kbd>S</kbd>/<kbd>N</kbd> skips ahead &amp; restarts timer
+          </span>
         </footer>
       )}
 
-      {settings.scrollMode === 'keyboard' && totalLines > 0 && (
-        <footer className="ctc-scroll-footer ctc-scroll-footer--kbd">
-          <span>Use <kbd>S</kbd> to advance each section after your phone captures the screen. Match step size to your camera crop in CamToCode.</span>
+      {settings.scrollMode === 'keyboard' && totalLines > 0 && !isFullscreen && (
+        <footer className="ctc-scroll-footer ctc-scroll-footer--kbd ctc-scroll-chrome">
+          <span><kbd>S</kbd> or <kbd>N</kbd> to advance after each phone capture. Scroll with mouse anytime.</span>
           <Link href="/docs" className="ctc-scroll-docs-link">How to use with CamToCode →</Link>
         </footer>
+      )}
+
+      {isFullscreen && (
+        <button
+          type="button"
+          className="ctc-scroll-fs-exit"
+          onClick={toggleFullscreen}
+          title="Exit fullscreen (Esc or F)"
+        >
+          ✕
+        </button>
       )}
     </div>
   )

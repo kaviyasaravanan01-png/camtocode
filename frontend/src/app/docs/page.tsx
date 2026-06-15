@@ -45,6 +45,43 @@ export default function DocsPage() {
             <li>Works with any editor: export or open the same file via the file picker</li>
           </ul>
 
+          <h3>Display &amp; settings</h3>
+          <p>
+            Open <em>Settings</em> on the scroll page (hidden in fullscreen — configure before you go full screen).
+            All options are saved in your browser automatically. Nothing is sent to a server.
+          </p>
+          <table className="ctc-docs-table">
+            <thead>
+              <tr><th>Setting</th><th>What it does</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>Background / text color</td><td>Match your screen for clearer phone capture (e.g. black bg, white text)</td></tr>
+              <tr><td>Font size &amp; zoom (+/−)</td><td>Make code larger on screen; zoom also affects auto line detection</td></tr>
+              <tr><td>Font family &amp; bold</td><td>Monospace presets or system font; bold for low-light capture</td></tr>
+              <tr><td>Line height &amp; padding</td><td>Fine-tune spacing to match your camera crop</td></tr>
+              <tr><td>Line numbers</td><td>Show or hide — toggle off if numbers clutter the capture</td></tr>
+              <tr><td>Auto lines per step</td><td>When on, step size = visible lines on screen; when off, set a fixed line count</td></tr>
+              <tr><td>Scroll mode</td><td><em>Keyboard</em> (manual) or <em>Timer</em> (auto every N seconds)</td></tr>
+            </tbody>
+          </table>
+
+          <h3>Fullscreen</h3>
+          <p>
+            Press <kbd>F</kbd> or click <em>Fullscreen</em> to show <strong>code only</strong> — header, status bar,
+            hints, buttons, and settings are all hidden so your phone captures a clean screen.
+          </p>
+          <ul>
+            <li>Exit with <kbd>Esc</kbd>, <kbd>F</kbd>, or the small <strong>✕</strong> that appears when you move the mouse to the top-right corner</li>
+            <li>Keyboard shortcuts (<kbd>S</kbd> <kbd>N</kbd> <kbd>P</kbd> <kbd>T</kbd>) still work in fullscreen</li>
+          </ul>
+
+          <h3>Mouse scroll</h3>
+          <p>
+            You can scroll the file freely with the <strong>mouse wheel or trackpad</strong> at any time — you are not
+            locked to keyboard/timer only. Manual scroll is useful to reposition before a capture. When you press{' '}
+            <kbd>S</kbd> or <kbd>N</kbd>, the next section advances from <em>where you scrolled to</em>.
+          </p>
+
           <h3>Recommended setup</h3>
           <ol>
             <li>
@@ -68,33 +105,38 @@ export default function DocsPage() {
             </li>
           </ol>
 
-          <h3>Two scroll modes</h3>
-
-          <h4>Keyboard mode (best with manual capture)</h4>
+          <h3>Keyboard shortcuts (both scroll modes)</h3>
           <p>Click the scroll page once so it has focus, then:</p>
           <table className="ctc-docs-table">
             <thead>
               <tr><th>Key</th><th>Action</th></tr>
             </thead>
             <tbody>
-              <tr><td><kbd>S</kbd></td><td>Advance to the next section (after phone finished capturing)</td></tr>
-              <tr><td><kbd>P</kbd></td><td>Pause — block <kbd>S</kbd> until you resume</td></tr>
+              <tr><td><kbd>S</kbd> or <kbd>N</kbd></td><td>Advance to the next section. In <strong>timer mode</strong>, also restarts the countdown from zero.</td></tr>
+              <tr><td><kbd>P</kbd></td><td><strong>Keyboard mode:</strong> pause / resume advance. <strong>Timer mode:</strong> pause / resume the timer.</td></tr>
               <tr><td><kbd>T</kbd></td><td>Terminate — stop session and jump back to line 1</td></tr>
+              <tr><td><kbd>F</kbd></td><td>Toggle fullscreen (code only, all UI hidden)</td></tr>
             </tbody>
           </table>
           <p>
-            <strong>Workflow:</strong> First section is already visible → capture on phone → press <kbd>S</kbd> on
-            laptop → capture next section → repeat. Last chunk automatically shows only remaining lines (e.g. 10
-            lines left when step is 30).
+            <strong>Keyboard mode workflow:</strong> First section is already visible → capture on phone → press{' '}
+            <kbd>S</kbd> or <kbd>N</kbd> on laptop → capture next section → repeat. Last chunk automatically shows
+            only remaining lines (e.g. 10 lines left when step is 30).
           </p>
 
           <h4>Timer mode (best with Auto Re-capture)</h4>
           <p>
             Set the timer interval to match CamToCode&apos;s <em>Auto Re-capture</em> delay (e.g. both 10 seconds).
             Press <em>Start timer</em> on the laptop when you start capturing on the phone. Sections advance in sync.
+            Use <kbd>S</kbd> or <kbd>N</kbd> anytime to skip ahead manually — the timer restarts from zero after each skip.
+            Use <kbd>P</kbd> to pause the timer or <kbd>T</kbd> to stop and reset to the top (same as the on-screen buttons, which are hidden in fullscreen).
           </p>
+
+          <h3>Offline use</h3>
           <p>
-            Use <em>Pause</em> / <em>Stop</em> on the scroll page if you need to adjust the camera or ROI.
+            Open <Link href="/scroll">/scroll</Link> once while online, then you can turn off Wi‑Fi and still open files,
+            scroll, change settings, and use all keyboard shortcuts — as long as you <strong>do not refresh</strong> the tab.
+            The scroll tool never calls an API. (CamToCode OCR on your phone still needs internet.)
           </p>
 
           <h3>Tips for clean captures</h3>
