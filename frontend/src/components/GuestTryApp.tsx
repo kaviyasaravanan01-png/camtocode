@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { io, Socket } from 'socket.io-client'
 import { getGuestFingerprint } from '@/lib/guestFingerprint'
+import AppNavMenu from '@/components/AppNavMenu'
+import { guestNavItems } from '@/lib/appNav'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 const LOGIN_URL = '/login?redirect=/app'
@@ -183,7 +185,7 @@ export default function GuestTryApp() {
         <Link href="/" style={s.logo}>CamToCode</Link>
         <div style={s.headerRight}>
           <span style={{ ...s.dot, background: socketStatus === 'connected' ? '#22c55e' : socketStatus === 'error' ? '#ef4444' : '#eab308' }} />
-          <Link href={LOGIN_URL} style={s.signInBtn}>Sign in →</Link>
+          <AppNavMenu items={guestNavItems()} />
         </div>
       </header>
 

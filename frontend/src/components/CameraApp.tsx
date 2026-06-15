@@ -7,6 +7,8 @@ import AIModelSelector, { type AiModelOption } from './AIModelSelector'
 import { DEFAULT_OCR_MODEL_KEY, DEFAULT_OCR_MODELS, ocrModelLabel } from '@/lib/ocrModels'
 import { type PlanUsage } from './UsageBadge'
 import InstallAppButton from './InstallAppButton'
+import AppNavMenu from './AppNavMenu'
+import { loggedInNavItems } from '@/lib/appNav'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
@@ -976,8 +978,6 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
         <div className="ctc-header-nav" style={s.hRight}>
           <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, display: 'inline-block', flexShrink: 0 }} />
           <button onClick={() => setShowDebug(d => !d)} style={s.iconBtn} title="Debug">🪲</button>
-          <a href="/history" className="ctc-nav-link" style={s.historyLink}>History</a>
-          <a href="/account" className="ctc-nav-link" style={s.historyLink}>Account</a>
           <span className="ctc-install-wrap"><InstallAppButton variant="compact" /></span>
           <button
             onClick={() => setShowSettings(v => !v)}
@@ -993,9 +993,7 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
           >
             <span style={{ fontSize: '1rem' }}>⚙️</span>
           </button>
-          <button onClick={handleSignOut} className="ctc-signout" style={s.signOutBtn} title="Sign out">
-            Sign Out
-          </button>
+          <AppNavMenu items={loggedInNavItems(handleSignOut)} />
         </div>
       </div>
 

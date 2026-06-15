@@ -2,6 +2,8 @@
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
 import PayButton from './PayButton'
+import AppNavMenu from '@/components/AppNavMenu'
+import { loggedInNavItems } from '@/lib/appNav'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 const SUPPORT_EMAIL = 'anandanathurelangovan94@gmail.com'
@@ -147,6 +149,11 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
     return Math.max(0, Math.ceil(diff / 86_400_000))
   })()
 
+  const handleSignOut = async () => {
+    await createClient().auth.signOut()
+    window.location.href = '/'
+  }
+
   return (
     <div style={s.root}>
       {/* Header */}
@@ -163,6 +170,7 @@ export default function AccountPage({ userEmail }: { userEmail: string }) {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={s.emailChip}>{userEmail}</span>
           <button onClick={fetchAll} style={s.refreshBtn} disabled={loading}>{loading ? '…' : '↻'}</button>
+          <AppNavMenu items={loggedInNavItems(handleSignOut)} />
         </div>
       </div>
 

@@ -1,6 +1,8 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase'
+import AppNavMenu from '@/components/AppNavMenu'
+import { loggedInNavItems } from '@/lib/appNav'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000'
 
@@ -120,14 +122,22 @@ export default function HistoryPage({ userId }: { userId: string }) {
     return map[ext || ''] || '📄'
   }
 
+  const handleSignOut = async () => {
+    await createClient().auth.signOut()
+    window.location.href = '/'
+  }
+
   return (
     <div style={s.root}>
       <div style={s.header}>
         <a href="/app" style={s.backLink}>← Back to App</a>
         <h1 style={s.title}>My Exports</h1>
-        <button onClick={fetchFiles} disabled={loading} style={s.refreshBtn}>
-          {loading ? '...' : '↻ Refresh'}
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <button onClick={fetchFiles} disabled={loading} style={s.refreshBtn}>
+            {loading ? '...' : '↻ Refresh'}
+          </button>
+          <AppNavMenu items={loggedInNavItems(handleSignOut)} />
+        </div>
       </div>
 
       <div style={s.content}>
