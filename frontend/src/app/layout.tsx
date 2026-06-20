@@ -1,31 +1,16 @@
 import type { Metadata, Viewport } from 'next'
 import { SITE_NAME, SITE_TAGLINE, SITE_URL } from '@/lib/site'
+import { SEO_KEYWORDS } from '@/lib/seo'
 import './globals.css'
-
-const keywords = [
-  'camera to code',
-  'photo to code',
-  'scan code from screen',
-  'OCR code scanner',
-  'AI Vision OCR',
-  'whiteboard to code',
-  'screenshot to python',
-  'MCQ scanner',
-  'scan and answer',
-  'instant answer MCQ',
-  'code from photo',
-  'developer OCR',
-  'CamToCode',
-]
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
-    default: `${SITE_NAME} — Camera to Code Converter | AI Scan & Answer`,
+    default: `${SITE_NAME} — Camera to Code | AI OCR & Scroll Automation`,
     template: `%s | ${SITE_NAME}`,
   },
-  description: SITE_TAGLINE,
-  keywords,
+  description: `${SITE_TAGLINE} Free Scroll Automation at camtocode.com/scroll. Plans from $0.`,
+  keywords: SEO_KEYWORDS,
   authors: [{ name: SITE_NAME, url: SITE_URL }],
   creator: SITE_NAME,
   publisher: SITE_NAME,
@@ -120,12 +105,22 @@ const jsonLd = {
       },
       description: SITE_TAGLINE,
       featureList: [
-        'AI Vision code OCR',
+        'AI Vision code OCR (Quick, Standard, Smart, Precision)',
         'AI Fix syntax repair',
         'Scan and Answer for MCQs',
         'Instant Answer mode',
-        'Cloud file history',
+        'Auto Re-capture for long files',
+        'Free Scroll Automation (camtocode.com/scroll)',
+        'Cloud file history with edit and share',
+        'Office-laptop friendly — no install',
       ],
+    },
+    {
+      '@type': 'Blog',
+      '@id': `${SITE_URL}/blog#blog`,
+      url: `${SITE_URL}/blog`,
+      name: `${SITE_NAME} Blog`,
+      description: 'Guides for camera-to-code OCR, Scroll Automation, and developer scanning tips.',
     },
     {
       '@type': 'Organization',

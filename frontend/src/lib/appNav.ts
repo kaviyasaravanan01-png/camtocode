@@ -6,6 +6,7 @@ export function loggedInNavItems(signOut: () => void): NavMenuItem[] {
     { type: 'link', href: '/account', label: 'Account', icon: '👤' },
     { type: 'link', href: '/scroll', label: 'Scroll Automation', icon: '📜' },
     { type: 'link', href: '/docs', label: 'Docs', icon: '📖' },
+    { type: 'link', href: '/blog', label: 'Blog', icon: '✍️' },
     { type: 'action', label: 'Sign Out', icon: '🚪', onClick: signOut, danger: true },
   ]
 }
@@ -14,6 +15,7 @@ export function guestNavItems(): NavMenuItem[] {
   return [
     { type: 'link', href: '/scroll', label: 'Scroll Automation', icon: '📜' },
     { type: 'link', href: '/docs', label: 'Docs', icon: '📖' },
+    { type: 'link', href: '/blog', label: 'Blog', icon: '✍️' },
     { type: 'link', href: '/login', label: 'Sign In', icon: '🔑' },
   ]
 }

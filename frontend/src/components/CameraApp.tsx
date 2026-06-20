@@ -665,13 +665,16 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
       })
 
       sock.on('recapture_trigger', () => {
+        if (!cameraEnlargedRef.current) {
+          sock.emit('pause_recapture', { remaining: recaptureRemainingRef.current || 0 })
+          addLog('recapture ignored — focus mode closed')
+          return
+        }
         recapturePausedRef.current = false
         setRecaptureSessionActive(true)
         setRecaptureCountdown(0)
         setRecapturePaused(false)
-        // Signal backend NOT to clear the accumulated file before starting
         sock.emit('recapture_start_signal')
-        // Trigger a new capture cycle
         handleStartRef.current?.()
       })
 
@@ -897,7 +900,35 @@ export default function CameraApp({ userId, userEmail }: { userId: string; userE
     setRecapturePaused(false)
     setRecaptureSessionActive(false)
   }
+  const capturingRef = useRef(false)
+  useEffect(() => { capturingRef.current = capturing }, [capturing])
+
+  const stopCaptureInterval = useCallback(() => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current)
+      intervalRef.current = null
+    }
+    setCapturing(false)
+  }, [])
+
+  const pauseRecaptureOnBackend = useCallback(() => {
+    const remaining = recaptureRemainingRef.current || recaptureCountdown || recaptureInterval
+    recapturePausedRef.current = true
+    setRecapturePaused(true)
+    if (recaptureCountdown > 0 || recaptureSessionActive) {
+      setRecaptureCountdown(0)
+      setRecaptureSessionActive(false)
+    }
+    emit('pause_recapture', { remaining })
+  }, [recaptureCountdown, recaptureSessionActive, recaptureInterval, emit])
+
   const closeFocusModeWithScroll = () => {
+    stopCaptureInterval()
+    if (capturingRef.current && socketRef.current?.connected) {
+      socketRef.current.emit('stop')
+      setProcessingScan(true)
+    }
+    pauseRecaptureOnBackend()
     closeFocusMode()
     if (scanCount > 0 || finalText || liveText) scrollToOutput()
   }

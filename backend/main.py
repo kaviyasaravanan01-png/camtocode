@@ -851,6 +851,17 @@ def supabase_write_text(path: str, content: str) -> bool:
     except Exception:
         return False
 
+def supabase_delete_path(path: str) -> bool:
+    """Delete one object from Supabase Storage."""
+    if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+        return False
+    url = f"{SUPABASE_URL}/storage/v1/object/camtocode/{path}"
+    try:
+        resp = httpx.delete(url, headers=_sb_headers(), timeout=15)
+        return resp.status_code in (200, 204)
+    except Exception:
+        return False
+
 def supabase_append_text(path: str, new_content: str) -> bool:
     """Append to a file in Supabase Storage (download + append + reupload)."""
     existing = supabase_read_text(path)
@@ -2273,6 +2284,63 @@ def list_user_exports(user_id: str):
             "download_url": signed,
         })
     return jsonify({"files": result})
+
+
+def _safe_export_filename(name: str) -> str | None:
+    """Reject path traversal and empty names."""
+    if not name or ".." in name or "/" in name or "\\" in name:
+        return None
+    return name.strip()
+
+
+@app.route("/api/exports/<user_id>/<filename>", methods=["DELETE"])
+def delete_user_export(user_id: str, filename: str):
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    payload = verify_supabase_token(token)
+    if not payload or payload.get("sub") != user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+    safe = _safe_export_filename(filename)
+    if not safe:
+        return jsonify({"error": "Invalid filename"}), 400
+    path = _sb_export_path(user_id, safe)
+    if not supabase_delete_path(path):
+        return jsonify({"error": "Delete failed"}), 500
+    return jsonify({"ok": True, "filename": safe})
+
+
+@app.route("/api/exports/<user_id>/<filename>", methods=["PUT"])
+def update_user_export(user_id: str, filename: str):
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    payload = verify_supabase_token(token)
+    if not payload or payload.get("sub") != user_id:
+        return jsonify({"error": "Unauthorized"}), 401
+    safe = _safe_export_filename(filename)
+    if not safe:
+        return jsonify({"error": "Invalid filename"}), 400
+    data = request.get_json(silent=True) or {}
+    content = data.get("content")
+    if content is None:
+        return jsonify({"error": "content required"}), 400
+    new_name = _safe_export_filename(str(data.get("new_name", safe)).strip()) or safe
+    old_path = _sb_export_path(user_id, safe)
+    if new_name != safe:
+        new_path = _sb_export_path(user_id, new_name)
+        if not supabase_write_text(new_path, str(content)):
+            return jsonify({"error": "Save failed"}), 500
+        supabase_delete_path(old_path)
+        out_path = new_path
+    else:
+        if not supabase_write_text(old_path, str(content)):
+            return jsonify({"error": "Save failed"}), 500
+        out_path = old_path
+    download_url = supabase_signed_url(out_path, expires_in=86400)
+    return jsonify({
+        "ok": True,
+        "filename": new_name,
+        "download_url": download_url,
+    })
 
 # ---------------------------------------------------------------------------
 # Socket events

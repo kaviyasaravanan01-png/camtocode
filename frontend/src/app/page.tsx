@@ -579,6 +579,13 @@ export default function LandingPage() {
               <a href="#pricing" style={s.footerLink}>Pricing</a>
             </div>
             <div style={s.footerCol}>
+              <span style={s.footerColTitle}>Resources</span>
+              <Link href="/blog" style={s.footerLink}>Blog</Link>
+              <Link href="/docs" style={s.footerLink}>Docs</Link>
+              <Link href="/scroll" style={s.footerLink}>Scroll Automation</Link>
+              <Link href="/try" style={s.footerLink}>Try Free Scan</Link>
+            </div>
+            <div style={s.footerCol}>
               <span style={s.footerColTitle}>Account</span>
               <Link href="/login" style={s.footerLink}>Sign In</Link>
               <Link href="/login" style={s.footerLink}>Sign Up</Link>

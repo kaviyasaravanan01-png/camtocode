@@ -1,10 +1,13 @@
 import Link from 'next/link'
 import { SITE_NAME } from '@/lib/site'
+import { buildPageMetadata } from '@/lib/seo'
 
-export const metadata = {
-  title: 'Docs',
-  description: `How to use ${SITE_NAME} with Scroll Automation for long files, auto-recapture, and office-friendly workflows.`,
-}
+export const metadata = buildPageMetadata({
+  title: 'Documentation — CamToCode, Scroll Automation & Auto Re-capture',
+  description:
+    'How to use camtocode.com with Scroll Automation, Auto Re-capture, keyboard shortcuts, and office-friendly workflows. Free tools, no install.',
+  path: '/docs',
+})
 
 export default function DocsPage() {
   return (
@@ -12,6 +15,7 @@ export default function DocsPage() {
       <header className="ctc-docs-header">
         <Link href="/" className="ctc-docs-logo">{SITE_NAME}</Link>
         <nav className="ctc-docs-nav">
+          <Link href="/blog">Blog</Link>
           <Link href="/scroll">Scroll Automation</Link>
           <Link href="/app">Camera App</Link>
           <Link href="/try">Try Free</Link>
